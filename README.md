@@ -136,9 +136,9 @@ DevSpace gives ChatGPT tools to:
 - read, write, and edit files inside the opened workspace
 - search code and inspect directories
 - run shell commands for tests, builds, git, and package scripts
-- use isolated Git worktrees for parallel coding sessions
+- reuse the exact existing checkout directory without creating hidden worktrees
 - follow project instructions from `AGENTS.md` and `CLAUDE.md`
-- discover local agent skills from your skill folders
+- discover Agent Skills from your configured skill folders
 - show tool cards and optional change summaries in ChatGPT Apps-compatible hosts
 
 ## Mental Model
@@ -178,8 +178,10 @@ devspace doctor
 ## Documentation
 
 - [Setup Guide](https://github.com/Waishnav/devspace/blob/main/docs/setup.md)
+- [Unified Project Workspace](docs/unified-project-workspace.md)
 - [ChatGPT Coding Workflow](https://github.com/Waishnav/devspace/blob/main/docs/chatgpt-coding-workflow.md)
 - [Configuration Reference](https://github.com/Waishnav/devspace/blob/main/docs/configuration.md)
+- [Native File Download](https://github.com/Waishnav/devspace/blob/main/docs/artifact-exchange.md)
 - [Security Model](https://github.com/Waishnav/devspace/blob/main/docs/security.md)
 - [Troubleshooting Gotchas](https://github.com/Waishnav/devspace/blob/main/docs/gotchas.md)
 
@@ -189,8 +191,8 @@ Every piece of software is becoming conversational. Natural language is
 redefining how we interact with tools, workflows, and systems.
 
 My bet is that ChatGPT becomes the operating system for everything. Once we
-reach AGI, we will simply talk to ChatGPT, and it will prompt, coordinate, and
-orchestrate sub-agents that set up the right loops for us.
+reach AGI, we will simply talk to ChatGPT, and it will coordinate the right
+tools and workflows for us.
 
 We are not there yet.
 
@@ -200,10 +202,10 @@ explicit, inspectable tools.
 
 ## Built by Waishnav
 
-I'm Waishnav, I like building opinionated products and tools, and DevSpace is one example of that.
-This year, I started my journey to build a single-person and multiple-agents company doing multiple millions in
-revenue. If you want to watch the failures, wins, lessons, and everything in
-between, come hang out with me on [X](https://x.com/wshxnv).
+I'm Waishnav. I like building opinionated products and tools, and DevSpace is one example.
+
+This year, I began my journey to build a one-person company capable of generating millions in revenue. If you want to follow the failures, wins, lessons, and everything in between, come hang out with me on [X](https://x.com/wshxnv).
+
 
 ## More from me
 

@@ -36,8 +36,40 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_PUBLIC_BASE_URL` | Public origin for the server, without `/mcp`. |
 | `DEVSPACE_ALLOWED_HOSTS` | Optional Host header allowlist override. |
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Owner password for OAuth approval. Must be at least 16 characters. |
-| `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
+| `DEVSPACE_WORKTREE_ROOT` | Legacy compatibility path for previously persisted managed-worktree sessions. New worktree creation is disabled. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
+
+## Native Artifact Download
+
+Native-file download is disabled by default. Enable it when ChatGPT needs to hand
+an attached or generated file into an already-open workspace:
+
+```bash
+DEVSPACE_ARTIFACTS=1 npx @waishnav/devspace serve
+```
+
+This feature currently supports Linux. It is not registered on macOS, Windows,
+or BSD because the secure publication path depends on traversable,
+descriptor-anchored directory paths provided by Linux procfs.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DEVSPACE_ARTIFACTS` | `0` | Expose `download_artifact` for trusted native files. |
+| `DEVSPACE_ARTIFACT_MAX_FILE_BYTES` | `104857600` | Maximum streamed size of one file (100 MiB). |
+
+The same settings may be persisted in `~/.devspace/config.json` as
+`artifactsEnabled` and `artifactMaxFileBytes`.
+
+`download_artifact` accepts the native file object supplied by the MCP connector,
+a `workspaceId` returned by `open_workspace`, and a relative workspace `path`.
+DevSpace safely creates missing parent directories, refuses to overwrite an
+existing destination, and returns only the normalized workspace-relative path.
+It does not accept conflict modes, expected hashes, arbitrary URL strings, local
+paths, embedded credentials, or extra object fields.
+
+There is no artifact root, total quota, TTL, pinning, persistent database record,
+or background artifact cleanup service. See [Native File Download](artifact-exchange.md)
+for the supported connector shape and security boundaries.
 
 ## OAuth
 
@@ -59,19 +91,23 @@ MCP clients discover metadata from:
 
 ## Tool Modes
 
-`DEVSPACE_TOOL_NAMING` controls tool names.
-
-| Value | Behavior |
-| --- | --- |
-| `short` | Default. Uses `read`, `edit`, `bash`, and related names. |
-| `legacy` | Uses `read_file`, `edit_file`, `run_shell`, and related names. |
-
 `DEVSPACE_TOOL_MODE` controls the tool surface.
 
 | Value | Behavior |
 | --- | --- |
-| `minimal` | Default. Disables dedicated search and list tools. Clients use the shell tool with `rg`, `grep`, `find`, `ls`, or `tree` for inspection. |
-| `full` | Enables dedicated `grep`, `glob`, and `ls` tools. |
+| `minimal` | Default. Exposes `open_workspace`, `read`, `write`, `edit`, and `bash`. Clients use `bash` with tools such as `rg`, `find`, and `ls` for inspection. |
+| `full` | Exposes the minimal tools plus dedicated `grep`, `glob`, and `ls` tools. |
+| `codex` | Experimental. Exposes `open_workspace`, `read`, `apply_patch`, `exec_command`, and `write_stdin`. Existing mutation and shell tools are hidden. |
+
+`DEVSPACE_MINIMAL_TOOLS` remains a backward-compatible alias when
+`DEVSPACE_TOOL_MODE` is unset: `1` selects `minimal` and `0` selects `full`.
+The `codex` mode must be selected through `DEVSPACE_TOOL_MODE` and always uses
+its fixed short tool names regardless of `DEVSPACE_TOOL_NAMING`.
+
+Codex-mode commands run without a PTY by default. Set `tty: true` on
+`exec_command` for interactive terminal programs. PTY support uses the optional
+`node-pty` dependency; `write_stdin` can send input, poll output, and resize PTY
+sessions.
 
 ## Widgets
 
@@ -88,13 +124,26 @@ MCP clients discover metadata from:
 | Variable | Purpose |
 | --- | --- |
 | `DEVSPACE_SKILLS` | Set to `0` to hide skills. Enabled by default. |
-| `DEVSPACE_AGENT_DIR` | Defaults to `~/.codex`. |
-| `DEVSPACE_SKILL_PATHS` | Optional comma-separated skill directories. |
+| `DEVSPACE_AGENT_DIR` | Defaults to `~/.codex`; its `skills` child is loaded for compatibility. |
+| `DEVSPACE_SKILL_PATHS` | Optional comma-separated additional skill directories. |
+
+DevSpace discovers standard Agent Skills from:
+
+- `~/.agents/skills`
+- project `.agents/skills`
+- `~/.devspace/skills`
+
+It also keeps compatibility with:
+
+- `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
+- additional paths from `DEVSPACE_SKILL_PATHS`
+
+Legacy project paths such as `.pi/skills` can be added through `DEVSPACE_SKILL_PATHS` when needed.
 
 Example:
 
 ```bash
-DEVSPACE_SKILL_PATHS="$HOME/.codex/skills,$HOME/.claude/skills" \
+DEVSPACE_SKILL_PATHS="$HOME/.claude/skills,$HOME/company/skills" \
 npx @waishnav/devspace serve
 ```
 
@@ -121,9 +170,8 @@ previews in logs.
 DEVSPACE_OAUTH_OWNER_TOKEN="$(openssl rand -base64 32)" \
 DEVSPACE_ALLOWED_ROOTS="$HOME/personal,$HOME/work" \
 DEVSPACE_PUBLIC_BASE_URL="https://devspace.example.com" \
-DEVSPACE_WORKTREE_ROOT="$HOME/.devspace/worktrees" \
+DEVSPACE_ARTIFACTS="1" \
 DEVSPACE_TOOL_MODE="minimal" \
-DEVSPACE_TOOL_NAMING="short" \
 DEVSPACE_WIDGETS="full" \
 npx @waishnav/devspace serve
 ```

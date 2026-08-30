@@ -3,3 +3,8 @@ dist/
 releases/
 .env
 *.log
+.DS_Store
+**/.DS_Store
+.playwright-cli/
+.agent/
+.agents/

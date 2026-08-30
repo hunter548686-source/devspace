@@ -130,14 +130,28 @@ To regenerate setup:
 npx @waishnav/devspace init --force
 ```
 
-## Unknown `workspaceId`
+## Unknown or Expired `workspaceId`
 
-`workspaceId` values are session identifiers. If the server restarts and the
-client receives an unknown workspace error, call `open_workspace` again for that
-project.
+`workspaceId` values are session identifiers. If the client receives an unknown
+or expired workspace error, call `open_workspace` once with the exact existing
+checkout directory, then reuse the returned `workspaceId` for later tools.
 
-Workspace session metadata is persisted, but clients should still treat
-`open_workspace` as the way to begin a fresh working session.
+Workspace session metadata is persisted. ChatGPT may provide optional
+conversation metadata that lets DevSpace resume the same checkout workspace for
+the same project in that conversation; repeated opens reuse the `workspaceId`
+and do not repeat context already provided for that reused checkout. Hosts
+without supported conversation metadata receive a normal new workspace. In all
+cases, continue passing the `workspaceId` returned by `open_workspace` to later
+tools. DevSpace does not create a missing directory or a managed worktree.
+
+To review work, call `show_changes` once after the final related file change. It
+shows the combined changes and advances the review point automatically.
+
+## Data Retention
+
+DevSpace does not currently prune workspace sessions, conversation bindings,
+or review refs. A future product retention policy will define safe cleanup for
+these records; no automatic deletion is performed today.
 
 ## Workspace Path Rejected
 
@@ -155,20 +169,27 @@ Then either open a project under an allowed root or rerun setup:
 npx @waishnav/devspace init --force
 ```
 
-## Worktree Mode Fails
+## ChatGPT Still Shows Retired Actions or an Old Schema
 
-Worktree mode requires:
+The live DevSpace server and ChatGPT's approved app actions are separate layers.
+Restarting DevSpace updates the live MCP server, but it does not automatically
+replace a frozen ChatGPT action snapshot. A stale snapshot can still advertise a
+retired parameter such as `mode: worktree`, omit a newly added tool, or cause an
+input-validation error before DevSpace's own handler runs.
 
-- Git installed
-- the path is inside a Git repository
-- the repository has at least one commit
-- the requested `baseRef` resolves to a commit
+For an app managed by a ChatGPT workspace admin or owner, open the app's Action
+control and use **Refresh** to review the current tools and input definitions.
+Review the diff and explicitly enable any newly discovered action that should be
+available. Some published app types may need to be recreated and republished
+instead of updated in place. Open a new chat for the final tool-list verification
+so an already-open conversation is not treated as proof that the refresh failed.
 
-For a new repository, create the first commit or use checkout mode.
+OpenAI documents this behavior in [Developer mode and MCP apps in
+ChatGPT](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt).
 
-Uncommitted source checkout changes are not copied into the managed worktree.
-Commit, stash, or ask the model to work in checkout mode if those changes are
-needed.
+Do not delete DevSpace OAuth records or tokens merely to refresh an action
+snapshot. That changes authentication state and does not replace the admin-side
+action review.
 
 ## Windows Shell Commands Fail
 
@@ -193,11 +214,18 @@ Skills are enabled by default. Check:
 DEVSPACE_SKILLS=1 npx @waishnav/devspace serve
 ```
 
-DevSpace looks in:
+DevSpace looks in standard Agent Skills locations:
 
-- `DEVSPACE_AGENT_DIR`, defaulting to `~/.codex`
-- project `.pi/skills`
-- `DEVSPACE_SKILL_PATHS`
+- `~/.agents/skills`
+- project `.agents/skills`
+- `~/.devspace/skills`
+
+It also checks compatibility and custom paths:
+
+- `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
+- additional paths from `DEVSPACE_SKILL_PATHS`
+
+Legacy project paths such as `.pi/skills` can be added through `DEVSPACE_SKILL_PATHS` when needed.
 
 If a skill appears in `open_workspace`, the model must read that skill's
 `SKILL.md` before reading other files inside the skill directory.

@@ -17,12 +17,31 @@ ChatGPT should call `open_workspace` once for a project folder:
 The result includes a `workspaceId`. All later file, search, edit, show-changes,
 and shell calls should reuse that same `workspaceId`.
 
-Do not reopen the same folder unless:
+ChatGPT may support automatic checkout recovery through optional host
+conversation metadata. This is an OpenAI-host adapter detail, not a standard MCP
+conversation field. When that optional context is available, opening the same
+checkout project again in the same conversation can continue in the existing
+workspace, and the context already provided for that reused checkout is not
+repeated. The portable workflow remains the same: keep using the `workspaceId`
+returned by `open_workspace` for later operations. Hosts without supported
+conversation context receive a normal new workspace and continue with that
+explicit `workspaceId` workflow. The model receives actionable workspace
+instructions; automatic-reuse bookkeeping is not a model-facing choice.
 
-- the `workspaceId` is rejected as unknown
-- the user switches to another folder
-- the user switches between checkout and worktree mode
-- the user explicitly asks to reopen
+DevSpace supports checkout mode only. It opens the exact existing directory
+supplied by the client. It does not create a missing project directory, choose a
+historical checkout, or create a managed Git worktree. A missing or mistyped path
+fails closed with an actionable error instead of opening an empty workspace.
+
+The first successful open provides complete instructions and coding context. A
+repeated open that reuses the same checkout workspace does not repeat the
+model-visible context, but the workspace UI continues to show the complete
+details.
+
+Do not call `open_workspace` again for the same checkout folder unless:
+
+- the `workspaceId` is rejected as unknown or expired
+- work moves to a different exact existing project directory
 
 ## Checkout Mode
 
@@ -35,30 +54,6 @@ Checkout mode is the default. DevSpace opens the actual directory:
 ```
 
 Use this when the user wants ChatGPT to work in the current checkout.
-
-## Worktree Mode
-
-Use worktree mode for isolated parallel work:
-
-```json
-{
-  "path": "~/work/my-project",
-  "mode": "worktree"
-}
-```
-
-Managed worktrees are created under:
-
-```text
-~/.devspace/worktrees
-```
-
-Worktree mode requires a Git repository with at least one commit. It starts from
-`HEAD` unless `baseRef` is provided.
-
-Uncommitted source checkout changes are not copied into the managed worktree.
-DevSpace reports when the source checkout was dirty so the model can decide how
-to proceed with the user.
 
 ## Project Instructions
 
@@ -79,11 +74,18 @@ new context during later tool calls.
 
 Skills are enabled by default for coding-agent workflows.
 
-DevSpace discovers skills from:
+DevSpace discovers standard Agent Skills from:
 
-- `DEVSPACE_AGENT_DIR`, which defaults to `~/.codex`
-- project `.pi/skills`
-- optional paths from `DEVSPACE_SKILL_PATHS`
+- `~/.agents/skills`
+- project `.agents/skills`
+- `~/.devspace/skills`
+
+It also keeps compatibility with:
+
+- `DEVSPACE_AGENT_DIR/skills`, defaulting to `~/.codex/skills`
+- additional paths from `DEVSPACE_SKILL_PATHS`
+
+Legacy project paths such as `.pi/skills` can be added through `DEVSPACE_SKILL_PATHS` when needed.
 
 When `open_workspace` returns matching skills, the model should read the
 advertised `SKILL.md` before following that skill.
@@ -97,7 +99,7 @@ Set `DEVSPACE_SKILLS=0` to hide skills from workspace output.
 
 ## Tool Names
 
-Short names are the default:
+DevSpace exposes these tool names:
 
 - `open_workspace`
 - `read`
@@ -109,15 +111,21 @@ By default, DevSpace also runs in `DEVSPACE_TOOL_MODE=minimal`, so dedicated
 `grep`, `glob`, and `ls` tools are hidden. Use `bash` with command-line tools
 such as `rg`, `find`, and `ls` for search and directory inspection.
 
-Legacy names are available with `DEVSPACE_TOOL_NAMING=legacy`:
+Use `DEVSPACE_TOOL_MODE=full` to restore dedicated search and directory tools.
+
+The experimental Codex-style surface is enabled with
+`DEVSPACE_TOOL_MODE=codex`. It exposes:
 
 - `open_workspace`
-- `read_file`
-- `write_file`
-- `edit_file`
-- `run_shell`
+- `read`
+- `apply_patch`
+- `exec_command`
+- `write_stdin`
 
-Use `DEVSPACE_TOOL_MODE=full` to restore dedicated search and directory tools.
+In this mode, `write`, `edit`, `bash`, `grep`, `glob`, and `ls` are not
+registered. `exec_command` returns a process session ID when a command is still
+running after its yield window. Use `write_stdin` to poll it, send input, resize
+a PTY, or send Ctrl-C. Set `tty: true` only for commands that need a terminal.
 
 ## Show Changes
 
@@ -128,6 +136,11 @@ and shell tools. The aggregate `show_changes` tool is not exposed by default.
 
 Use `DEVSPACE_WIDGETS=off` to disable widget UI, or `DEVSPACE_WIDGETS=changes`
 to expose the aggregate show-changes flow.
+
+When `show_changes` is exposed, call it exactly once after the final file
+modification in any turn that changes files. It shows the combined changes for
+that turn and advances the review point automatically. Reusing a workspace does
+not change this workflow.
 
 ## Shell Use
 
