@@ -20,6 +20,15 @@ assert.equal(
   resolve(home, "personal", "devspace"),
 );
 
+assert.throws(
+  () => assertAllowedPath("~/.codex-local/project", [home], [join(home, ".codex-local")]),
+  /inside blocked root/,
+);
+assert.equal(
+  assertAllowedPath("~/.codex/project", [home], [join(home, ".codex-local")]),
+  resolve(home, ".codex", "project"),
+);
+
 assert.equal(
   resolveAllowedPath("~/file.txt", "/workspace", ["/workspace"]),
   resolve("/workspace", "~/file.txt"),

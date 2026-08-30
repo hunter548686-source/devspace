@@ -13,10 +13,16 @@ export interface DevspaceUserConfig {
   host?: string;
   port?: number;
   allowedRoots?: string[];
+  blockedRoots?: string[];
+  portfolioRoot?: string;
   publicBaseUrl?: string | null;
   allowedHosts?: string[];
   stateDir?: string;
   worktreeRoot?: string;
+  unifiedProjectWorkspace?: boolean;
+  externalRepositoryEnabled?: boolean;
+  artifactsEnabled?: boolean;
+  artifactMaxFileBytes?: number;
   agentDir?: string;
 }
 
@@ -44,6 +50,10 @@ export function devspaceConfigPath(env: NodeJS.ProcessEnv = process.env): string
 
 export function devspaceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(devspaceConfigDir(env), "auth.json");
+}
+
+export function devspaceSkillsDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(devspaceConfigDir(env), "skills");
 }
 
 export function loadDevspaceFiles(env: NodeJS.ProcessEnv = process.env): DevspaceFiles {

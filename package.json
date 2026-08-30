@@ -1,6 +1,6 @@
 {
   "name": "@waishnav/devspace",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Expose a secure local coding workspace through an MCP server.",
   "type": "module",
   "main": "dist/server.js",
@@ -13,7 +13,7 @@
   "files": [
     "dist",
     "docs",
-    "scripts",
+    "scripts/fix-node-pty-permissions.mjs",
     "README.md"
   ],
   "publishConfig": {
@@ -24,8 +24,21 @@
     "build": "npm run clean && npm run build:app && tsc -p tsconfig.build.json",
     "build:app": "vite build",
     "dev": "node scripts/dev-server.mjs",
+    "postinstall": "node scripts/fix-node-pty-permissions.mjs",
     "start": "node dist/cli.js serve",
-    "test": "tsx src/config.test.ts && tsx src/roots.test.ts && tsx src/skills.test.ts && tsx src/workspaces.test.ts && tsx src/review-checkpoints.test.ts && tsx src/oauth-store.test.ts && tsx src/cli.test.ts",
+    "source-authority:check": "node scripts/check-source-authority.mjs --mode shadow --operation audit",
+    "source-authority:enforce": "node scripts/check-source-authority.mjs --mode enforce --operation deploy",
+    "unified-workspace:check": "node scripts/deploy-unified-project-workspace-v1.mjs",
+    "unified-workspace:stage": "npm run build && node scripts/deploy-unified-project-workspace-v1.mjs --stage",
+    "unified-workspace:deploy": "npm run build && node scripts/deploy-unified-project-workspace-v1.mjs --deploy",
+    "unified-workspace:rollback": "node scripts/rollback-unified-project-workspace-v1.mjs",
+    "unified-workspace:status": "node scripts/toggle-unified-project-workspace.mjs status",
+    "unified-workspace:enable": "node scripts/toggle-unified-project-workspace.mjs enable",
+    "unified-workspace:disable": "node scripts/toggle-unified-project-workspace.mjs disable",
+    "unified-workspace:restore-config": "node scripts/toggle-unified-project-workspace.mjs restore",
+    "unified-workspace:restart": "node scripts/schedule-devspace-restart.mjs",
+    "unified-workspace:test-runtime": "node scripts/test-unified-project-workspace-runtime.mjs",
+    "test": "tsx src/config.test.ts && tsx src/request-meta.test.ts && tsx src/incoming-artifacts.test.ts && tsx src/artifact-download.test.ts && tsx src/ui/card-types.test.ts && tsx src/ui/patch-display.test.ts && tsx src/ui/tool-display.test.ts && tsx src/apply-patch.test.ts && tsx src/process-platform.test.ts && tsx src/process-sessions.test.ts && tsx src/mcp-sessions.test.ts && tsx src/server-shutdown.test.ts && tsx src/roots.test.ts && tsx src/external-repository.test.ts && tsx src/skills.test.ts && tsx src/project-workspace-resolver.test.ts && tsx src/workspaces.test.ts && tsx src/workspace-conversation.test.ts && tsx src/review-checkpoints.test.ts && tsx src/server.test.ts && tsx src/oauth-store.test.ts && tsx src/cli.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [],
@@ -33,13 +46,15 @@
   "license": "MIT",
   "dependencies": {
     "@clack/prompts": "^1.5.1",
-    "@earendil-works/pi-coding-agent": "^0.80.1",
+    "@earendil-works/pi-coding-agent": "^0.84.4",
     "@modelcontextprotocol/ext-apps": "^1.7.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@pierre/diffs": "^1.2.5",
     "better-sqlite3": "^12.10.0",
+    "diff": "^8.0.3",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
+    "lucide": "^1.24.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "semver": "^7.8.4",
@@ -58,8 +73,12 @@
     "vite": "^8.0.14"
   },
   "overrides": {
-    "protobufjs": "7.6.4",
+    "brace-expansion": "5.0.9",
+    "protobufjs": "7.6.5",
     "ws": "8.21.0",
-    "undici": "8.5.0"
+    "undici": "8.9.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

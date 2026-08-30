@@ -15,18 +15,47 @@ assert.equal(loadConfig(baseEnv).widgets, "full");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "changes" }).widgets, "changes");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "full" }).widgets, "full");
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "off" }).widgets, "off");
-assert.equal(loadConfig(baseEnv).toolNaming, "short");
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_NAMING: "short" }).toolNaming, "short");
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_NAMING: "legacy" }).toolNaming, "legacy");
-assert.equal(loadConfig(baseEnv).minimalTools, true);
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "minimal" }).minimalTools, true);
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "full" }).minimalTools, false);
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "0" }).minimalTools, false);
-assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "1" }).minimalTools, true);
+assert.equal(loadConfig(baseEnv).toolMode, "minimal");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "minimal" }).toolMode, "minimal");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "full" }).toolMode, "full");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "codex" }).toolMode, "codex");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "0" }).toolMode, "full");
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_MINIMAL_TOOLS: "1" }).toolMode, "minimal");
 assert.equal(loadConfig(baseEnv).skillsEnabled, true);
+assert.equal(loadConfig(baseEnv).devspaceSkillsDir, join(emptyConfigDir, "skills"));
+assert.deepEqual(loadConfig(baseEnv).blockedRoots, []);
+assert.deepEqual(
+  loadConfig({ ...baseEnv, DEVSPACE_BLOCKED_ROOTS: "~/.codex-local,~/.codex-ollama" }).blockedRoots,
+  [join(process.env.HOME ?? "", ".codex-local"), join(process.env.HOME ?? "", ".codex-ollama")],
+);
+assert.equal(loadConfig(baseEnv).portfolioRoot, undefined);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_PORTFOLIO_ROOT: process.cwd() }).portfolioRoot,
+  process.cwd(),
+);
+assert.equal(loadConfig(baseEnv).unifiedProjectWorkspace, true);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_UNIFIED_PROJECT_WORKSPACE: "0" }).unifiedProjectWorkspace,
+  false,
+);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_UNIFIED_PROJECT_WORKSPACE: "1" }).unifiedProjectWorkspace,
+  true,
+);
+assert.equal(loadConfig(baseEnv).externalRepositoryEnabled, false);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_EXTERNAL_REPOSITORY: "1" }).externalRepositoryEnabled,
+  true,
+);
+assert.equal(loadConfig(baseEnv).artifactsEnabled, false);
+assert.equal(loadConfig(baseEnv).artifactMaxFileBytes, 100 * 1024 * 1024);
+assert.equal(loadConfig({ ...baseEnv, DEVSPACE_ARTIFACTS: "1" }).artifactsEnabled, true);
+assert.equal(
+  loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "123" }).artifactMaxFileBytes,
+  123,
+);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "0" }).skillsEnabled, false);
 assert.equal(loadConfig({ ...baseEnv, DEVSPACE_SKILLS: "1" }).skillsEnabled, true);
-
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_WIDGETS: "invalid" }),
   /Invalid DEVSPACE_WIDGETS: invalid/,
@@ -42,10 +71,6 @@ assert.throws(
 assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_TOOL_MODE: "invalid" }),
   /Invalid DEVSPACE_TOOL_MODE: invalid/,
-);
-assert.throws(
-  () => loadConfig({ ...baseEnv, DEVSPACE_TOOL_NAMING: "invalid" }),
-  /Invalid DEVSPACE_TOOL_NAMING: invalid/,
 );
 
 assert.deepEqual(loadConfig(baseEnv).logging, {
@@ -125,6 +150,10 @@ assert.throws(
   () => loadConfig({ ...baseEnv, DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS: "0" }),
   /Invalid DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS: 0/,
 );
+assert.throws(
+  () => loadConfig({ ...baseEnv, DEVSPACE_ARTIFACT_MAX_FILE_BYTES: "0" }),
+  /Invalid DEVSPACE_ARTIFACT_MAX_FILE_BYTES: 0/,
+);
 
 assert.equal(loadConfig(baseEnv).publicBaseUrl, "http://127.0.0.1:7676");
 assert.deepEqual(loadConfig(baseEnv).allowedHosts, ["localhost", "127.0.0.1", "::1"]);
@@ -148,7 +177,12 @@ writeFileSync(
   JSON.stringify({
     port: 8787,
     allowedRoots: [process.cwd()],
+    portfolioRoot: process.cwd(),
     publicBaseUrl: "https://devspace.example.com",
+    unifiedProjectWorkspace: false,
+    externalRepositoryEnabled: true,
+    artifactsEnabled: true,
+    artifactMaxFileBytes: 321,
   }),
 );
 writeFileSync(
@@ -162,6 +196,11 @@ const fileConfig = loadConfig({ DEVSPACE_CONFIG_DIR: configDir });
 assert.equal(fileConfig.port, 8787);
 assert.equal(fileConfig.oauth.ownerToken, "persisted-owner-token-long-enough");
 assert.equal(fileConfig.publicBaseUrl, "https://devspace.example.com");
+assert.equal(fileConfig.portfolioRoot, process.cwd());
+assert.equal(fileConfig.unifiedProjectWorkspace, false);
+assert.equal(fileConfig.externalRepositoryEnabled, true);
+assert.equal(fileConfig.artifactsEnabled, true);
+assert.equal(fileConfig.artifactMaxFileBytes, 321);
 assert.deepEqual(fileConfig.allowedHosts, [
   "localhost",
   "127.0.0.1",

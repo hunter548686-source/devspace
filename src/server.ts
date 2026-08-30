@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from "@modelcontextprotocol/sdk/server/auth/router.js";
@@ -17,7 +18,20 @@ import {
 import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
+import { applyPatch } from "./apply-patch.js";
+import {
+  isArtifactDownloadSupportedPlatform,
+  registerArtifactTools,
+} from "./artifact-tools.js";
 import { loadConfig, type ServerConfig, type WidgetMode } from "./config.js";
+import {
+  setupExternalRepository,
+  type SetupExternalRepositoryInput,
+} from "./external-repository.js";
+import {
+  createOpenAIIncomingArtifactAdapter,
+  type IncomingArtifactAdapter,
+} from "./incoming-artifacts.js";
 import {
   logEvent,
   requestIp,
@@ -35,12 +49,24 @@ import {
   writeFileTool,
 } from "./pi-tools.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
+import {
+  McpSessionRegistry,
+  type McpSessionCloseResult,
+} from "./mcp-sessions.js";
+import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
+import { resolveProjectWorkspace } from "./project-workspace-resolver.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
+import { openAiConversationScopeId } from "./request-meta.js";
+import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
 
 type Transport = StreamableHTTPServerTransport;
+// MCP clients can reconnect without closing the previous transport. Bound stale
+// session retention so abandoned MCP servers do not accumulate for the life of the process.
+const MCP_SESSION_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1_000;
+const MCP_SESSION_CLEANUP_INTERVAL_MS = 5 * 60 * 1_000;
 const WORKSPACE_APP_URI = "ui://devspace/workspace-app.html";
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const WRITE_TOOL_ANNOTATIONS = {
@@ -65,7 +91,7 @@ const SHELL_TOOL_ANNOTATIONS = {
 interface RunningServer {
   app: ReturnType<typeof createMcpExpressApp>;
   config: ServerConfig;
-  close(): void;
+  close(): Promise<void>;
 }
 
 type ToolContent =
@@ -137,16 +163,18 @@ function toolWidgetDescriptorMeta(
   };
 }
 
-interface ToolNames {
-  openWorkspace: "open_workspace";
-  read: "read_file" | "read";
-  write: "write_file" | "write";
-  edit: "edit_file" | "edit";
-  grep: "grep_files" | "grep";
-  glob: "find_files" | "glob";
-  ls: "list_directory" | "ls";
-  shell: "run_shell" | "bash";
-}
+const toolNames = {
+  openProject: "open_project",
+  openWorkspace: "open_workspace",
+  read: "read",
+  write: "write",
+  edit: "edit",
+  grep: "grep",
+  glob: "glob",
+  ls: "ls",
+  setupExternalRepository: "setup_external_repository",
+  shell: "bash",
+} as const;
 
 interface ToolLogFields {
   tool: string;
@@ -160,32 +188,26 @@ interface ToolLogFields {
   error?: string;
 }
 
-function toolNamesFor(config: ServerConfig): ToolNames {
-  return config.toolNaming === "short"
-    ? {
-        openWorkspace: "open_workspace",
-        read: "read",
-        write: "write",
-        edit: "edit",
-        grep: "grep",
-        glob: "glob",
-        ls: "ls",
-        shell: "bash",
-      }
-    : {
-        openWorkspace: "open_workspace",
-        read: "read_file",
-        write: "write_file",
-        edit: "edit_file",
-        grep: "grep_files",
-        glob: "find_files",
-        ls: "list_directory",
-        shell: "run_shell",
-      };
-}
+function serverInstructions(config: ServerConfig): string {
+  const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
+    ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
+    : "";
+  const projectEntryInstruction = config.unifiedProjectWorkspace
+    ? ` When the user or ChatGPT Project identifies a registered project, prefer ${toolNames.openProject} with its stable project ID or exact name so DevSpace resolves the canonical or task workspace from the portfolio registry. Use ${toolNames.openWorkspace} only for an explicit path or compatibility recovery.`
+    : "";
+  const externalRepositoryInstruction = config.externalRepositoryEnabled
+    ? ` Use ${toolNames.setupExternalRepository} for controlled cloning of a reviewed public GitHub repository.`
+    : "";
+  const showChangesInstruction =
+    config.widgets === "changes"
+      ? " If the turn successfully modifies files by creating, editing, overwriting, deleting, moving, or applying patches, call show_changes exactly once for that workspace after the final related file change and before your final response so the user can inspect the aggregate diff for that turn. Do not call it after every individual file change; do not skip it because individual file-change tools already returned diffs."
+      : "";
 
-function serverInstructions(config: ServerConfig, toolNames: ToolNames): string {
-  const inspection = config.minimalTools
+  if (config.toolMode === "codex") {
+    return `Use DevSpace as a local coding workspace. Open the exact existing project directory with ${toolNames.openWorkspace} and reuse its workspaceId. DevSpace must not create a separate managed worktree; it should operate on the same physical project directory already used by the coding environment. Open another workspace only when the exact project directory changes or the workspaceId is invalid. Use ${toolNames.read} for direct file reads, apply_patch for all file modifications, exec_command for inspection, tests, builds, and other commands, and write_stdin to poll or interact with running processes. Follow instructions returned by ${toolNames.openWorkspace}; read applicable instruction and skill files before working in their scope.${projectEntryInstruction}${artifactInstruction}${showChangesInstruction}`;
+  }
+
+  const inspection = config.toolMode !== "full"
     ? `In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use ${toolNames.shell} with command-line tools such as grep, rg, find, ls, and tree for search and directory inspection. `
     : `Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. `;
 
@@ -195,13 +217,9 @@ function serverInstructions(config: ServerConfig, toolNames: ToolNames): string 
 
   const agentsMd = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in availableAgentsFiles, use ${toolNames.read} to inspect that instruction file and follow it. `;
 
-  const showChanges =
-    config.widgets === "changes"
-      ? " After creating, editing, or overwriting files, call show_changes once after the related file changes are complete so the user can see the aggregate diff."
-      : "";
-
-  return `Use DevSpace as a local coding workspace. Call ${toolNames.openWorkspace} once per project folder or worktree to obtain a workspaceId. Reuse that same workspaceId for all later file, search, edit, write, show-changes, and shell tools in that folder; do not call ${toolNames.openWorkspace} again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${showChanges}`;
+  return `Use DevSpace as a local coding workspace. Open the exact existing project directory with ${toolNames.openWorkspace} and reuse that workspaceId for later file, search, edit, write, show-changes, and shell tools. DevSpace must not create a separate managed worktree; it should operate on the same physical project directory already used by the coding environment. Open another workspace only when the exact project directory changes or the workspaceId is invalid. ${agentsMd}${skills}${inspection}Prefer ${toolNames.edit} for targeted modifications, ${toolNames.write} only for new files or complete rewrites, and ${toolNames.shell} for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not create or modify files with ${toolNames.shell}; avoid shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or any command whose purpose is to write project files.${externalRepositoryInstruction}${projectEntryInstruction}${artifactInstruction}${showChangesInstruction}`;
 }
+
 function resultOutputSchema(extra: z.ZodRawShape = {}): z.ZodRawShape {
   return {
     result: z
@@ -452,12 +470,273 @@ async function assertWorkspaceAppAssets(): Promise<void> {
   }
 }
 
-function createMcpServer(
+function processResult(snapshot: ProcessSnapshot): string {
+  const status = snapshot.running
+    ? `Process running with session ID ${snapshot.sessionId}.`
+    : snapshot.signal
+      ? `Process exited after signal ${snapshot.signal}.`
+      : `Process exited with code ${snapshot.exitCode ?? "unknown"}.`;
+  return snapshot.output ? `${snapshot.output.replace(/\n$/, "")}\n${status}` : status;
+}
+
+function processOutputSchema(): z.ZodRawShape {
+  return resultOutputSchema({
+    sessionId: z.number().optional(),
+    running: z.boolean(),
+    exitCode: z.number().int().optional(),
+    signal: z.string().optional(),
+    wallTimeMs: z.number().nonnegative(),
+    outputTruncated: z.boolean(),
+  });
+}
+
+function processToolResponse(
+  tool: "exec_command" | "write_stdin",
+  workspaceId: string,
+  snapshot: ProcessSnapshot,
+  summary: Record<string, unknown>,
+) {
+  const result = processResult(snapshot);
+  const content = [textBlock(result)];
+  const outputSummary = textSummary(snapshot.output ? [textBlock(snapshot.output)] : []);
+  return {
+    content,
+    _meta: {
+      tool,
+      card: {
+        workspaceId,
+        summary: { ...summary, ...outputSummary },
+        payload: { content },
+      },
+    },
+    structuredContent: {
+      result,
+      sessionId: snapshot.sessionId,
+      running: snapshot.running,
+      exitCode: snapshot.exitCode,
+      signal: snapshot.signal,
+      wallTimeMs: snapshot.wallTimeMs,
+      outputTruncated: snapshot.outputTruncated,
+    },
+  };
+}
+
+function registerCodexProcessTools(
+  server: McpServer,
+  config: ServerConfig,
+  workspaces: WorkspaceRegistry,
+  processSessions: ProcessSessionManager,
+): void {
+  const processMutationSessions = new Map<
+    number,
+    { workspaceId: string; finalize: () => Promise<void> }
+  >();
+
+  registerAppTool(
+    server,
+    "exec_command",
+    {
+      title: "Execute command",
+      description:
+        "Run a command inside an open workspace. Returns its result when it exits during the yield window, otherwise returns a sessionId for write_stdin. Use this for file inspection, tests, builds, package scripts, and long-running processes. Call open_workspace first and pass workspaceId.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier returned by open_workspace."),
+        cmd: z.string().min(1).describe("Shell command to execute."),
+        tty: z
+          .boolean()
+          .optional()
+          .describe("Allocate a pseudo-terminal for interactive commands. Defaults to false."),
+        columns: z.number().int().min(1).max(1_000).optional().describe("Initial PTY width. Defaults to 80."),
+        rows: z.number().int().min(1).max(1_000).optional().describe("Initial PTY height. Defaults to 24."),
+        workingDirectory: z
+          .string()
+          .optional()
+          .describe("Working directory relative to the workspace root. Defaults to the workspace root."),
+        yieldTimeMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(30_000)
+          .optional()
+          .describe("Milliseconds to wait before returning a running session. Defaults to 10000."),
+        maxOutputTokens: z
+          .number()
+          .int()
+          .positive()
+          .max(100_000)
+          .optional()
+          .describe("Approximate output token budget. Defaults to 10000."),
+      },
+      outputSchema: processOutputSchema(),
+      ...toolWidgetDescriptorMeta(config, "shell"),
+      annotations: SHELL_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId, cmd, tty, columns, rows, workingDirectory, yieldTimeMs, maxOutputTokens }) => {
+      const startedAt = performance.now();
+      const workspace = workspaces.getWorkspace(workspaceId);
+      const cwd = workspaces.resolveWorkingDirectory(workspace, workingDirectory);
+      const mutationSession = await workspaces.beginLongRunningMutation(
+        workspace,
+        "exec_command",
+      );
+      let trackedSessionId: number | undefined;
+      let finalization: Promise<void> | undefined;
+      const finalize = (): Promise<void> => {
+        if (!finalization) {
+          finalization = mutationSession.complete();
+          const cleanup = (): void => {
+            if (trackedSessionId !== undefined) {
+              processMutationSessions.delete(trackedSessionId);
+            }
+          };
+          void finalization.then(cleanup, (error) => {
+            cleanup();
+            logEvent(config.logging, "warn", "process_workspace_refresh_failed", {
+              workspaceId,
+              sessionId: trackedSessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+        return finalization;
+      };
+
+      let snapshot;
+      try {
+        snapshot = await processSessions.start({
+          workspaceId,
+          command: cmd,
+          cwd,
+          workspaceRoot: workspace.root,
+          tty,
+          columns,
+          rows,
+          yieldTimeMs,
+          maxOutputTokens,
+          onExit: finalize,
+        });
+      } catch (error) {
+        await mutationSession.fail();
+        throw error;
+      }
+
+      if (snapshot.running) {
+        if (snapshot.sessionId === undefined) {
+          await mutationSession.fail();
+          throw new Error(
+            "PROCESS_SESSION_ID_MISSING: a running command did not return a process session identifier.",
+          );
+        }
+        trackedSessionId = snapshot.sessionId;
+        processMutationSessions.set(snapshot.sessionId, { workspaceId, finalize });
+        if (finalization) void finalization.then(
+          () => processMutationSessions.delete(snapshot.sessionId as number),
+          () => processMutationSessions.delete(snapshot.sessionId as number),
+        );
+      } else {
+        await finalize();
+      }
+
+      logToolCall(config, {
+        tool: "exec_command",
+        workspaceId,
+        workingDirectory: workingDirectory ?? ".",
+        command: cmd,
+        commandLength: cmd.length,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return processToolResponse("exec_command", workspaceId, snapshot, {
+        command: cmd,
+        workingDirectory: workingDirectory ?? ".",
+        running: snapshot.running,
+        exitCode: snapshot.exitCode,
+        wallTimeMs: snapshot.wallTimeMs,
+      });
+    },
+  );
+
+  registerAppTool(
+    server,
+    "write_stdin",
+    {
+      title: "Write to process",
+      description:
+        "Poll or write characters to a process returned by exec_command. Omit chars or pass an empty string to poll. Pass \\u0003 to send Ctrl-C.",
+      inputSchema: {
+        workspaceId: z.string().describe("Workspace identifier used to start the process."),
+        sessionId: z.number().describe("Process session identifier returned by exec_command."),
+        chars: z.string().optional().describe("Characters to write. Omit or pass an empty string to poll."),
+        columns: z.number().int().min(1).max(1_000).optional().describe("Resize a PTY to this width."),
+        rows: z.number().int().min(1).max(1_000).optional().describe("Resize a PTY to this height."),
+        yieldTimeMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(30_000)
+          .optional()
+          .describe("Milliseconds to wait for process output or completion. Defaults to 10000."),
+        maxOutputTokens: z
+          .number()
+          .int()
+          .positive()
+          .max(100_000)
+          .optional()
+          .describe("Approximate output token budget. Defaults to 10000."),
+      },
+      outputSchema: processOutputSchema(),
+      ...toolWidgetDescriptorMeta(config, "shell"),
+      annotations: SHELL_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId, sessionId, chars, columns, rows, yieldTimeMs, maxOutputTokens }) => {
+      const startedAt = performance.now();
+      workspaces.getWorkspace(workspaceId);
+      const mutationSession = processMutationSessions.get(sessionId);
+      if (mutationSession && mutationSession.workspaceId !== workspaceId) {
+        throw new Error(
+          `Process session ${sessionId} does not belong to workspace ${workspaceId}.`,
+        );
+      }
+      const snapshot = await processSessions.write({
+        workspaceId,
+        sessionId,
+        chars,
+        columns,
+        rows,
+        yieldTimeMs,
+        maxOutputTokens,
+      });
+      if (!snapshot.running && mutationSession) {
+        await mutationSession.finalize();
+        processMutationSessions.delete(sessionId);
+      }
+
+      logToolCall(config, {
+        tool: "write_stdin",
+        workspaceId,
+        success: true,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+
+      return processToolResponse("write_stdin", workspaceId, snapshot, {
+        sessionId,
+        charactersWritten: chars?.length ?? 0,
+        running: snapshot.running,
+        exitCode: snapshot.exitCode,
+        wallTimeMs: snapshot.wallTimeMs,
+      });
+    },
+  );
+}
+
+export function createMcpServer(
   config: ServerConfig,
   workspaces: WorkspaceRegistry,
   reviewCheckpoints: ReturnType<typeof createReviewCheckpointManager>,
+  processSessions: ProcessSessionManager,
+  incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
 ): McpServer {
-  const toolNames = toolNamesFor(config);
   const server = new McpServer(
     {
       name: "devspace",
@@ -467,7 +746,7 @@ function createMcpServer(
         "Secure local coding workspace for MCP clients. Provides workspace-scoped file, search, edit, write, and shell tools.",
     },
     {
-      instructions: serverInstructions(config, toolNames),
+      instructions: serverInstructions(config),
     },
   );
 
@@ -502,13 +781,230 @@ function createMcpServer(
     },
   );
 
+  if (config.unifiedProjectWorkspace) {
+    registerAppTool(
+      server,
+      toolNames.openProject,
+      {
+        title: "Open registered project",
+        description:
+          "Resolve a registered project ID, name, display name, or exact alias to the correct existing local workspace, then open that exact physical directory. Use intent=new for a new task, intent=resume with a taskHint to continue an existing task workspace, and intent=inspect for read-oriented project inspection. Resolution fails closed when the project or task workspace is missing or ambiguous. This is the preferred entry for ChatGPT Projects and Work; open_workspace remains available for explicit path recovery.",
+        inputSchema: {
+          project: z
+            .string()
+            .min(1)
+            .describe("Registered project_id, project name, display name, or exact configured alias."),
+          intent: z
+            .enum(["new", "resume", "inspect"])
+            .optional()
+            .describe("Workspace selection intent. Defaults to resume."),
+          taskHint: z
+            .string()
+            .optional()
+            .describe("Task ID, branch fragment, or stable task phrase used to select one existing task workspace when resuming."),
+        },
+        outputSchema: resultOutputSchema({
+          status: z.enum(["resolved", "ambiguous", "not_found"]),
+          projectId: z.string().optional(),
+          projectName: z.string().optional(),
+          canonicalPath: z.string().optional(),
+          selectedPath: z.string().optional(),
+          resolutionReason: z.string(),
+          candidatePaths: z.array(z.string()),
+          workspaceId: z.string().optional(),
+          root: z.string().optional(),
+          mode: z.enum(["checkout"]).optional(),
+          agentsFiles: z.array(workspaceAgentsFileOutputSchema).optional(),
+          availableAgentsFiles: z.array(workspaceAvailableAgentsFileOutputSchema).optional(),
+          skills: z.array(workspaceSkillOutputSchema).optional(),
+          skillDiagnostics: z.array(z.unknown()).optional(),
+          instruction: z.string().optional(),
+        }),
+        ...toolWidgetDescriptorMeta(config, "workspace"),
+        annotations: { readOnlyHint: true },
+      },
+      async ({ project, intent, taskHint }, { _meta }) => {
+        const startedAt = performance.now();
+        const resolution = await resolveProjectWorkspace(
+          { project, intent, taskHint },
+          {
+            allowedRoots: config.allowedRoots,
+            portfolioRoots: config.portfolioRoot ? [config.portfolioRoot] : [],
+            sessions: workspaces.listStoredSessions(),
+          },
+        );
+        const candidatePaths = resolution.candidates.map((candidate) => candidate.path);
+
+        if (resolution.status !== "resolved" || !resolution.selectedPath) {
+          const result = [
+            `Project workspace resolution ${resolution.status}: ${resolution.reason}`,
+            resolution.projectId ? `Project ID: ${resolution.projectId}` : undefined,
+            resolution.canonicalPath ? `Canonical root: ${resolution.canonicalPath}` : undefined,
+            candidatePaths.length > 0 ? `Candidates: ${candidatePaths.join(", ")}` : undefined,
+            "No workspace was opened. Supply an exact registered project or a taskHint that uniquely identifies the intended existing task workspace.",
+          ].filter(Boolean).join("\n");
+          const content = [textBlock(result)];
+          logFailedToolResponse(
+            config,
+            {
+              tool: toolNames.openProject,
+              path: resolution.canonicalPath,
+            },
+            content,
+            startedAt,
+          );
+          return {
+            content,
+            isError: true,
+            structuredContent: {
+              result,
+              status: resolution.status,
+              projectId: resolution.projectId,
+              projectName: resolution.projectName,
+              canonicalPath: resolution.canonicalPath,
+              resolutionReason: resolution.reason,
+              candidatePaths,
+            },
+          };
+        }
+
+        const {
+          workspace,
+          agentsFiles,
+          availableAgentsFiles,
+          workspaceReused,
+          includeBootstrapContext,
+        } = await workspaces.openWorkspace(
+          { path: resolution.selectedPath, mode: "checkout" },
+          { conversationScopeId: openAiConversationScopeId(_meta) },
+        );
+        if (config.widgets === "changes") {
+          await reviewCheckpoints.initializeWorkspace({
+            workspaceId: workspace.id,
+            root: workspace.root,
+          });
+        }
+        const cardSkills = workspace.skills
+          .filter((skill) => !skill.disableModelInvocation)
+          .map((skill) => ({
+            name: skill.name,
+            description: skill.description,
+            path: formatPathForPrompt(skill.filePath),
+          }));
+        const cardAgentsFiles = agentsFiles.map((file) => ({
+          path: formatAgentsPath(file.path, workspace.root),
+          content: file.content,
+        }));
+        const cardAvailableAgentsFiles = availableAgentsFiles.map((file) => ({
+          path: formatAgentsPath(file.path, workspace.root),
+        }));
+        const visibleSkills = includeBootstrapContext ? cardSkills : [];
+        const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
+        const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
+        const cardInstruction = config.skillsEnabled
+          ? "This workspace is bound to the returned projectId. Reuse this workspaceId for the exact selected physical directory. Follow loaded agentsFiles instructions, read applicable nested instruction files, and read matching skills before proceeding. Do not switch to another project path without a new open_project resolution."
+          : "This workspace is bound to the returned projectId. Reuse this workspaceId for the exact selected physical directory. Follow loaded agentsFiles instructions and read applicable nested instruction files before proceeding. Do not switch to another project path without a new open_project resolution.";
+        const instruction = workspaceReused
+          ? [
+              `Workspace already open as ${workspace.id}.`,
+              `Project ${resolution.projectId ?? project} remains bound to ${workspace.root}.`,
+              "Reuse this workspaceId and continue following the project context previously supplied for this physical directory.",
+            ].join("\n\n")
+          : cardInstruction;
+        const result = [
+          workspaceReused
+            ? `Registered project workspace already open as ${workspace.id}.`
+            : `Opened registered project workspace ${workspace.id}.`,
+          `Project ID: ${resolution.projectId ?? project}`,
+          resolution.projectName ? `Project: ${resolution.projectName}` : undefined,
+          `Canonical root: ${resolution.canonicalPath ?? resolution.selectedPath}`,
+          `Selected root: ${workspace.root}`,
+          `Resolution: ${resolution.reason}`,
+          loadedAgentsFiles.length > 0
+            ? `Loaded project instructions: ${loadedAgentsFiles.map((file) => file.path).join(", ")}`
+            : undefined,
+          availableAgentsFileOutputs.length > 0
+            ? `Available nested instructions: ${availableAgentsFileOutputs.map((file) => file.path).join(", ")}`
+            : undefined,
+          visibleSkills.length > 0
+            ? `Available skills: ${visibleSkills.map((skill) => skill.name).join(", ")}`
+            : undefined,
+          instruction,
+        ].filter(Boolean).join("\n");
+        const content = [textBlock(result)];
+
+        logToolCall(config, {
+          tool: toolNames.openProject,
+          workspaceId: workspace.id,
+          path: workspace.root,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content,
+          _meta: {
+            tool: toolNames.openProject,
+            card: {
+              workspaceId: workspace.id,
+              root: workspace.root,
+              path: workspace.root,
+              mode: workspace.mode,
+              projectId: resolution.projectId,
+              projectName: resolution.projectName,
+              canonicalPath: resolution.canonicalPath,
+              selectedPath: resolution.selectedPath,
+              resolutionReason: resolution.reason,
+              workspaceReused,
+              includeBootstrapContext,
+              agentsFiles: cardAgentsFiles,
+              availableAgentsFiles: cardAvailableAgentsFiles,
+              skills: cardSkills,
+              instruction: cardInstruction,
+              summary: {
+                projectId: resolution.projectId,
+                resolutionReason: resolution.reason,
+                mode: workspace.mode,
+                agentsFiles: cardAgentsFiles.length,
+                availableAgentsFiles: cardAvailableAgentsFiles.length,
+                skills: cardSkills.length,
+              },
+            },
+          },
+          structuredContent: {
+            result,
+            status: "resolved" as const,
+            projectId: resolution.projectId,
+            projectName: resolution.projectName,
+            canonicalPath: resolution.canonicalPath,
+            selectedPath: resolution.selectedPath,
+            resolutionReason: resolution.reason,
+            candidatePaths,
+            workspaceId: workspace.id,
+            root: workspace.root,
+            mode: workspace.mode,
+            ...(includeBootstrapContext
+              ? {
+                  agentsFiles: loadedAgentsFiles,
+                  availableAgentsFiles: availableAgentsFileOutputs,
+                  skills: visibleSkills,
+                  skillDiagnostics: workspace.skillDiagnostics,
+                }
+              : {}),
+            instruction,
+          },
+        };
+      },
+    );
+  }
+
   registerAppTool(
     server,
     "open_workspace",
     {
       title: "Open workspace",
       description:
-        "Open a local project directory as a coding workspace. Call this once per project folder or worktree before reading, editing, searching, writing, showing changes, or running commands. Reuse the returned workspaceId for later calls in the same folder; do not call open_workspace again unless switching folders/worktrees, changing checkout/worktree mode, the workspaceId is rejected as unknown, or the user explicitly asks to reopen. By default this opens the actual checkout; set mode=\"worktree\" when the user asks for an isolated or parallel coding session. Returns a workspaceId, loaded root project instructions, and nested instruction file paths the model should read before working in those directories.",
+        "Open an exact existing local project directory as a coding workspace. DevSpace works directly in that directory and does not create a separate managed worktree. Call this once for the exact directory, then reuse the returned workspaceId for later file, search, edit, show-changes, and shell calls. Open another workspace only when the exact project directory changes or the workspaceId is invalid.",
       inputSchema: {
         path: z
           .string()
@@ -516,71 +1012,80 @@ function createMcpServer(
             "Absolute path, or a leading-tilde home path such as ~/project, to a local project directory inside an allowed root.",
           ),
         mode: z
-          .enum(["checkout", "worktree"])
+          .enum(["checkout"], {
+            error:
+              "Managed worktree mode is disabled. Remove mode or set mode to checkout, then open the exact existing project directory.",
+          })
           .optional()
           .describe(
-            "Defaults to checkout. Use checkout to work in the actual directory. Use worktree to create an isolated managed Git worktree for parallel work.",
+            "Optional. Checkout is the only supported mode; DevSpace works directly in the supplied directory.",
           ),
-        baseRef: z
-          .string()
-          .optional()
-          .describe("Git ref to base a worktree on. Only used with mode=\"worktree\". Defaults to HEAD."),
       },
       outputSchema: {
         workspaceId: z.string(),
         root: z.string(),
-        mode: z.enum(["checkout", "worktree"]),
-        sourceRoot: z.string().optional(),
-        worktree: z
-          .object({
-            path: z.string(),
-            baseRef: z.string(),
-            baseSha: z.string(),
-            dirtySource: z.boolean(),
-            detached: z.boolean(),
-            managed: z.boolean(),
-          })
-          .optional(),
-        agentsFiles: z.array(workspaceAgentsFileOutputSchema),
-        availableAgentsFiles: z.array(workspaceAvailableAgentsFileOutputSchema),
-        skills: z.array(workspaceSkillOutputSchema),
-        skillDiagnostics: z.array(z.unknown()),
+        mode: z.enum(["checkout"]),
+        agentsFiles: z.array(workspaceAgentsFileOutputSchema).optional(),
+        availableAgentsFiles: z.array(workspaceAvailableAgentsFileOutputSchema).optional(),
+        skills: z.array(workspaceSkillOutputSchema).optional(),
+        skillDiagnostics: z.array(z.unknown()).optional(),
         instruction: z.string(),
       },
       ...toolWidgetDescriptorMeta(config, "workspace"),
       annotations: { readOnlyHint: true },
     },
-    async ({ path, mode, baseRef }) => {
+    async ({ path, mode }, { _meta }) => {
       const startedAt = performance.now();
-      const { workspace, agentsFiles, availableAgentsFiles } = await workspaces.openWorkspace({ path, mode, baseRef });
+      const {
+        workspace,
+        agentsFiles,
+        availableAgentsFiles,
+        workspaceReused,
+        includeBootstrapContext,
+      } = await workspaces.openWorkspace(
+        { path, mode },
+        { conversationScopeId: openAiConversationScopeId(_meta) },
+      );
       if (config.widgets === "changes") {
-        void reviewCheckpoints.initializeWorkspace({
+        await reviewCheckpoints.initializeWorkspace({
           workspaceId: workspace.id,
           root: workspace.root,
         });
       }
-      const visibleSkills = workspace.skills
+      const cardSkills = workspace.skills
         .filter((skill) => !skill.disableModelInvocation)
         .map((skill) => ({
           name: skill.name,
           description: skill.description,
           path: formatPathForPrompt(skill.filePath),
         }));
-      const loadedAgentsFiles = agentsFiles.map((file) => ({
+      const cardAgentsFiles = agentsFiles.map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
         content: file.content,
       }));
-      const availableAgentsFileOutputs = availableAgentsFiles.map((file) => ({
+      const cardAvailableAgentsFiles = availableAgentsFiles.map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
       }));
-      const instruction = config.skillsEnabled
-        ? "Use this workspaceId in all subsequent tool calls for this project. Do not call open_workspace again for this same folder unless this workspaceId stops working, the user asks to reopen, or you switch to a different folder/worktree. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
-        : "Use this workspaceId in all subsequent tool calls for this project. Do not call open_workspace again for this same folder unless this workspaceId stops working, the user asks to reopen, or you switch to a different folder/worktree. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
+      const visibleSkills = includeBootstrapContext ? cardSkills : [];
+      const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
+      const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
+      const cardInstruction = config.skillsEnabled
+        ? "Use this workspaceId in all subsequent tool calls for this exact project directory. Do not call open_workspace again for the same directory unless this workspaceId stops working. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
+        : "Use this workspaceId in all subsequent tool calls for this exact project directory. Do not call open_workspace again for the same directory unless this workspaceId stops working. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
+      const instruction = workspaceReused
+        ? [
+            `Workspace already open as ${workspace.id}.`,
+            "Reuse this workspaceId for subsequent tool calls. This is the same physical directory previously opened in this conversation.",
+            "Continue following the project instructions, nested instruction files, skills, and diagnostics previously provided for this workspace. They remain the active workspace context and are not repeated here.",
+          ].join("\n\n")
+        : cardInstruction;
       const resultContent: ToolContent[] = [
         {
           type: "text" as const,
           text: [
-            `Opened workspace ${workspace.id}`,
+            workspaceReused
+              ? `Workspace already open as ${workspace.id}.`
+              : `Opened workspace ${workspace.id}.`,
             `Root: ${workspace.root}`,
             `Mode: ${workspace.mode}`,
             loadedAgentsFiles.length > 0
@@ -612,11 +1117,18 @@ function createMcpServer(
             workspaceId: workspace.id,
             root: workspace.root,
             path: workspace.root,
+            mode: workspace.mode,
+            workspaceReused,
+            includeBootstrapContext,
+            agentsFiles: cardAgentsFiles,
+            availableAgentsFiles: cardAvailableAgentsFiles,
+            skills: cardSkills,
+            instruction: cardInstruction,
             summary: {
-              agentsFiles: loadedAgentsFiles.length,
-              availableAgentsFiles: availableAgentsFileOutputs.length,
-              skills: visibleSkills.length,
-              skillDiagnostics: workspace.skillDiagnostics.length,
+              mode: workspace.mode,
+              agentsFiles: cardAgentsFiles.length,
+              availableAgentsFiles: cardAvailableAgentsFiles.length,
+              skills: cardSkills.length,
             },
           },
         },
@@ -624,12 +1136,14 @@ function createMcpServer(
           workspaceId: workspace.id,
           root: workspace.root,
           mode: workspace.mode,
-          sourceRoot: workspace.sourceRoot,
-          worktree: workspace.worktree,
-          agentsFiles: loadedAgentsFiles,
-          availableAgentsFiles: availableAgentsFileOutputs,
-          skills: visibleSkills,
-          skillDiagnostics: workspace.skillDiagnostics,
+          ...(includeBootstrapContext
+            ? {
+                agentsFiles: loadedAgentsFiles,
+                availableAgentsFiles: availableAgentsFileOutputs,
+                skills: visibleSkills,
+                skillDiagnostics: workspace.skillDiagnostics,
+              }
+            : {}),
           instruction,
         },
       };
@@ -733,6 +1247,7 @@ function createMcpServer(
     },
   );
 
+  if (config.toolMode !== "codex") {
   registerAppTool(
     server,
     toolNames.write,
@@ -757,10 +1272,12 @@ function createMcpServer(
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
-      const response = await writeFileTool(input, {
-        cwd: workspace.root,
-        root: workspace.root,
-      });
+      const response = await workspaces.runMutation(workspace, toolNames.write, () =>
+        writeFileTool(input, {
+          cwd: workspace.root,
+          root: workspace.root,
+        }),
+      );
 
       if (response.isError) {
         logFailedToolResponse(config, {
@@ -844,10 +1361,12 @@ function createMcpServer(
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       workspaces.resolvePath(workspace, input.path);
-      const response = await editFileTool(input, {
-        cwd: workspace.root,
-        root: workspace.root,
-      });
+      const response = await workspaces.runMutation(workspace, toolNames.edit, () =>
+        editFileTool(input, {
+          cwd: workspace.root,
+          root: workspace.root,
+        }),
+      );
 
       if (response.isError) {
         logFailedToolResponse(config, {
@@ -896,6 +1415,84 @@ function createMcpServer(
       };
     },
   );
+  }
+
+  if (config.toolMode === "codex") {
+    registerAppTool(
+      server,
+      "apply_patch",
+      {
+        title: "Apply patch",
+        description:
+          "Apply one Codex-style patch inside an open workspace. Supports adding, overwriting, updating, deleting, and moving files. Use this for all file modifications. Paths must be relative to the workspace. Call open_workspace first and pass workspaceId.",
+        inputSchema: {
+          workspaceId: z
+            .string()
+            .describe("Workspace identifier returned by open_workspace."),
+          patch: z
+            .string()
+            .describe("Patch text enclosed by *** Begin Patch and *** End Patch markers."),
+        },
+        outputSchema: resultOutputSchema({
+          additions: z.number(),
+          removals: z.number(),
+          files: z.array(
+            z.object({
+              path: z.string(),
+              previousPath: z.string().optional(),
+              operation: z.enum(["add", "update", "delete", "move"]),
+            }),
+          ),
+        }),
+        ...toolWidgetDescriptorMeta(config, "edit"),
+        annotations: EDIT_TOOL_ANNOTATIONS,
+      },
+      async ({ workspaceId, patch }) => {
+        const startedAt = performance.now();
+        const workspace = workspaces.getWorkspace(workspaceId);
+        const applied = await workspaces.runMutation(workspace, "apply_patch", () =>
+          applyPatch(workspace.root, patch),
+        );
+        const paths = applied.files.map((file) => file.path).join(", ");
+        const result = `Applied patch to ${applied.files.length} file(s): ${paths}`;
+        const content = [textBlock(result)];
+        const displayPath = applied.files.length === 1
+          ? applied.files[0]?.path
+          : `${applied.files.length} files`;
+
+        logToolCall(config, {
+          tool: "apply_patch",
+          workspaceId,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content,
+          _meta: {
+            tool: "apply_patch",
+            card: {
+              workspaceId,
+              path: displayPath,
+              summary: {
+                files: applied.files.length,
+                additions: applied.additions,
+                removals: applied.removals,
+              },
+              files: applied.files,
+              payload: { patch: applied.patch },
+            },
+          },
+          structuredContent: {
+            result,
+            additions: applied.additions,
+            removals: applied.removals,
+            files: applied.files,
+          },
+        };
+      },
+    );
+  }
 
   if (config.widgets === "changes") {
     registerAppTool(
@@ -904,32 +1501,23 @@ function createMcpServer(
       {
         title: "Show changes",
         description:
-          "Show aggregate file changes in an open workspace since the last shown checkpoint or since the workspace was opened. After you create, edit, or overwrite files, call this once when the related file changes are complete so the user can inspect the combined diff.",
+          "Show the changes made in this turn for an open workspace. Call this once after the final related file change and before your final response so the user can review the combined diff. Do not call it after each individual file change.",
         inputSchema: {
           workspaceId: z
             .string()
             .describe("Workspace identifier returned by open_workspace."),
-          since: z
-            .enum(["last_shown", "workspace_open"])
-            .optional()
-            .describe("Defaults to last_shown. Use workspace_open to compare against the initial open_workspace checkpoint."),
-          markReviewed: z
-            .boolean()
-            .optional()
-            .describe("Defaults to true. When true, advances the last shown checkpoint to the current workspace state."),
         },
         outputSchema: resultOutputSchema(),
         ...toolWidgetDescriptorMeta(config, "show_changes"),
         annotations: { readOnlyHint: true },
       },
-      async ({ workspaceId, since, markReviewed }) => {
+      async ({ workspaceId }) => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
         const review = await reviewCheckpoints.reviewChanges({
           workspaceId,
           root: workspace.root,
-          since: since ?? "last_shown",
-          markReviewed: markReviewed ?? true,
+          markReviewed: true,
         });
 
         const content = [textBlock(review.result)];
@@ -961,12 +1549,12 @@ function createMcpServer(
     );
   }
 
-  if (!config.minimalTools) {
+  if (config.toolMode === "full") {
     registerAppTool(
       server,
       toolNames.grep,
       {
-        title: config.toolNaming === "short" ? "Grep" : "Grep files",
+        title: "Grep",
         description:
           "Search file contents inside an open workspace. Use this before broad reads when looking for symbols, text, or usage sites. Respects project ignore rules. Call open_workspace first and pass workspaceId.",
         inputSchema: {
@@ -1039,7 +1627,7 @@ function createMcpServer(
       server,
       toolNames.glob,
       {
-        title: config.toolNaming === "short" ? "Glob" : "Find files",
+        title: "Glob",
         description:
           "Find files by glob pattern inside an open workspace. Use this to discover filenames or narrow file sets before reading. Respects project ignore rules. Call open_workspace first and pass workspaceId.",
         inputSchema: {
@@ -1109,7 +1697,7 @@ function createMcpServer(
       server,
       toolNames.ls,
       {
-        title: config.toolNaming === "short" ? "Ls" : "List directory",
+        title: "Ls",
         description:
           "List a directory inside an open workspace. Use this for directory inspection before reading files. Call open_workspace first and pass workspaceId.",
         inputSchema: {
@@ -1172,12 +1760,165 @@ function createMcpServer(
     );
   }
 
+  if (config.toolMode !== "codex") {
+  if (config.externalRepositoryEnabled) {
+  registerAppTool(
+    server,
+    toolNames.setupExternalRepository,
+    {
+      title: "Set up external repository",
+      description:
+        "Clone one public HTTPS GitHub repository into a new destination inside an open workspace, optionally check out an exact commit and run a reproducible npm ci install. The destination parent must already exist and the destination itself must not exist. Git hooks, file-protocol access, interactive credential prompts, npm audit/funding calls, and npm install scripts are disabled by default. On failure, the incomplete destination is removed. Use this instead of shell-based git clone or npm install. Call open_workspace first and pass workspaceId.",
+      inputSchema: {
+        workspaceId: z
+          .string()
+          .describe("Workspace identifier returned by open_workspace."),
+        repositoryUrl: z
+          .string()
+          .describe(
+            "Public HTTPS GitHub repository URL in owner/repository form. Credentials, query strings, fragments, and non-GitHub hosts are rejected.",
+          ),
+        destination: z
+          .string()
+          .describe(
+            "New repository directory relative to the workspace root. Its parent must already exist and resolve inside the workspace.",
+          ),
+        ref: z
+          .string()
+          .optional()
+          .describe(
+            "Optional branch or tag to check out in detached mode. Ignored when expectedCommit is supplied.",
+          ),
+        expectedCommit: z
+          .string()
+          .optional()
+          .describe(
+            "Optional full 40-character commit SHA to check out and verify exactly.",
+          ),
+        installDependencies: z
+          .boolean()
+          .optional()
+          .describe(
+            "When true, require package-lock.json or npm-shrinkwrap.json and run npm ci after checkout. Defaults to false.",
+          ),
+        allowInstallScripts: z
+          .boolean()
+          .optional()
+          .describe(
+            "Permit npm lifecycle/install scripts. Defaults to false and should remain false unless the project has been reviewed and the user explicitly approves scripts.",
+          ),
+        timeoutSeconds: z
+          .number()
+          .positive()
+          .max(900)
+          .optional()
+          .describe(
+            "Timeout applied to each clone, checkout, verification, and installation command. Clamped to 30-900 seconds; default 300.",
+          ),
+      },
+      outputSchema: resultOutputSchema({
+        repositoryUrl: z.string(),
+        destination: z.string(),
+        commit: z.string(),
+        dependenciesInstalled: z.boolean(),
+        installCommand: z.string().optional(),
+        installScriptsAllowed: z.boolean(),
+      }),
+      _meta: {},
+      annotations: SHELL_TOOL_ANNOTATIONS,
+    },
+    async ({ workspaceId, ...input }) => {
+      const startedAt = performance.now();
+      const workspace = workspaces.getWorkspace(workspaceId);
+      workspaces.resolvePath(workspace, input.destination);
+
+      try {
+        const portfolioRoot = config.portfolioRoot;
+        if (!portfolioRoot) {
+          throw new Error(
+            "SOURCE_AUTHORITY_REGISTRY_REQUIRED: configure DEVSPACE_PORTFOLIO_ROOT before using setup_external_repository.",
+          );
+        }
+        const result = await workspaces.runMutation(
+          workspace,
+          toolNames.setupExternalRepository,
+          () => setupExternalRepository(
+            input as SetupExternalRepositoryInput,
+            {
+              cwd: workspace.root,
+              root: workspace.root,
+              projectRegistryPath: join(
+                portfolioRoot,
+                "portfolio",
+                "PROJECT_REGISTRY.json",
+              ),
+            },
+          ),
+        );
+        const resultText = [
+          `Cloned ${result.repositoryUrl}`,
+          `Destination: ${result.destination}`,
+          `Commit: ${result.commit}`,
+          result.dependenciesInstalled
+            ? `Dependencies: installed with ${result.installCommand}`
+            : "Dependencies: not installed",
+          `Install scripts allowed: ${String(result.installScriptsAllowed)}`,
+        ].join("\n");
+        const content = [textBlock(resultText)];
+
+        logToolCall(config, {
+          tool: toolNames.setupExternalRepository,
+          workspaceId,
+          path: input.destination,
+          success: true,
+          durationMs: Math.round(performance.now() - startedAt),
+        });
+
+        return {
+          content,
+          _meta: {
+            tool: toolNames.setupExternalRepository,
+            card: {
+              workspaceId,
+              path: input.destination,
+              summary: {
+                commit: result.commit,
+                dependenciesInstalled: result.dependenciesInstalled,
+                installScriptsAllowed: result.installScriptsAllowed,
+              },
+              payload: { content },
+            },
+          },
+          structuredContent: {
+            result: resultText,
+            ...result,
+          },
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const content = [textBlock(message)];
+        logFailedToolResponse(
+          config,
+          {
+            tool: toolNames.setupExternalRepository,
+            workspaceId,
+            path: input.destination,
+          },
+          content,
+          startedAt,
+        );
+        return { content, isError: true };
+      }
+    },
+  );
+  }
+
   registerAppTool(
     server,
     toolNames.shell,
     {
-      title: config.toolNaming === "short" ? "Bash" : "Run shell",
-      description: config.minimalTools
+      title: "Bash",
+      description: config.toolMode !== "full"
         ? `Run a shell command inside an open workspace. Use only for tests, builds, git inspection, package scripts, search, file discovery, and directory inspection. In minimal tool mode, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} are disabled; use command-line tools such as grep, rg, find, ls, and tree for those read-only inspection actions. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read} for direct file reads. Call open_workspace first and pass workspaceId. This is powerful local execution and should only be exposed behind strong authentication.`
         : `Run a shell command inside an open workspace. Use only for tests, builds, git inspection, package scripts, and commands that are better executed by the shell. Do not use ${toolNames.shell} to create or modify files. Do not use shell redirection, heredocs, tee, sed -i, perl -i, node/python/ruby scripts, or generated scripts to write project files; use ${toolNames.edit} for targeted changes and ${toolNames.write} for new files or full rewrites. Prefer ${toolNames.read}, ${toolNames.grep}, ${toolNames.glob}, and ${toolNames.ls} for file inspection. Call open_workspace first and pass workspaceId. This is powerful local execution and should only be exposed behind strong authentication.`,
       inputSchema: {
@@ -1213,10 +1954,12 @@ function createMcpServer(
         workspace,
         workingDirectory,
       );
-      const response = await runShellTool(input, {
-        cwd,
-        root: workspace.root,
-      });
+      const response = await workspaces.runMutation(workspace, toolNames.shell, () =>
+        runShellTool(input, {
+          cwd,
+          root: workspace.root,
+        }),
+      );
 
       if (response.isError) {
         logFailedToolResponse(config, {
@@ -1261,11 +2004,33 @@ function createMcpServer(
       };
     },
   );
+  }
+
+  if (config.toolMode === "codex") {
+    registerCodexProcessTools(server, config, workspaces, processSessions);
+  }
+
+  if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
+    registerArtifactTools(server, {
+      config,
+      workspaces,
+      incomingArtifactAdapters,
+    });
+  }
 
   return server;
 }
 
-export function createServer(config = loadConfig()): RunningServer {
+export interface CreateServerOptions {
+  incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+}
+
+export function createServer(
+  config = loadConfig(),
+  options: CreateServerOptions = {},
+): RunningServer {
+  const incomingArtifactAdapters = options.incomingArtifactAdapters
+    ?? [createOpenAIIncomingArtifactAdapter()];
   const allowedHosts = config.allowedHosts.includes("*")
     ? undefined
     : Array.from(new Set([config.host, ...config.allowedHosts]));
@@ -1273,7 +2038,7 @@ export function createServer(config = loadConfig()): RunningServer {
     host: config.host,
     ...(allowedHosts ? { allowedHosts } : {}),
   });
-  const transports = new Map<string, Transport>();
+  const transports = new McpSessionRegistry<Transport>();
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
@@ -1285,6 +2050,38 @@ export function createServer(config = loadConfig()): RunningServer {
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();
+  const processSessions = new ProcessSessionManager();
+
+  const logSessionCloseResults = (
+    reason: "idle_timeout" | "server_shutdown",
+    results: McpSessionCloseResult[],
+  ) => {
+    for (const result of results) {
+      if (result.error) {
+        logEvent(config.logging, "warn", "mcp_session_close_failed", {
+          reason,
+          sessionIdPrefix: sessionIdPrefix(result.sessionId),
+          error:
+            result.error instanceof Error
+              ? result.error.message
+              : String(result.error),
+        });
+        continue;
+      }
+
+      logEvent(config.logging, "info", "mcp_session_closed", {
+        reason,
+        sessionIdPrefix: sessionIdPrefix(result.sessionId),
+      });
+    }
+  };
+
+  const sessionCleanupTimer = setInterval(() => {
+    void transports
+      .closeIdle(MCP_SESSION_IDLE_TIMEOUT_MS)
+      .then((results) => logSessionCloseResults("idle_timeout", results));
+  }, MCP_SESSION_CLEANUP_INTERVAL_MS);
+  sessionCleanupTimer.unref();
 
   if (config.logging.trustProxy) {
     app.set("trust proxy", true);
@@ -1389,7 +2186,7 @@ export function createServer(config = loadConfig()): RunningServer {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (newSessionId) => {
-            if (transport) transports.set(newSessionId, transport);
+            if (transport) transports.register(newSessionId, transport);
             logEvent(config.logging, "info", "mcp_session_created", {
               requestId,
               sessionIdPrefix: sessionIdPrefix(newSessionId),
@@ -1400,15 +2197,21 @@ export function createServer(config = loadConfig()): RunningServer {
 
         transport.onclose = () => {
           const closedSessionId = transport?.sessionId;
-          if (closedSessionId) {
-            transports.delete(closedSessionId);
+          if (closedSessionId && transports.remove(closedSessionId)) {
             logEvent(config.logging, "info", "mcp_session_closed", {
+              reason: "transport_close",
               sessionIdPrefix: sessionIdPrefix(closedSessionId),
             });
           }
         };
 
-        const server = createMcpServer(config, workspaces, reviewCheckpoints);
+        const server = createMcpServer(
+          config,
+          workspaces,
+          reviewCheckpoints,
+          processSessions,
+          incomingArtifactAdapters,
+        );
         await server.connect(transport);
       } else {
         sendJsonRpcError(res, 400, -32000, "No valid MCP session");
@@ -1427,15 +2230,20 @@ export function createServer(config = loadConfig()): RunningServer {
     }
   });
 
-  let closed = false;
+  let closePromise: Promise<void> | undefined;
   return {
     app,
     config,
     close: () => {
-      if (closed) return;
-      closed = true;
-      oauthProvider.close();
-      workspaceStore.close?.();
+      closePromise ??= (async () => {
+        clearInterval(sessionCleanupTimer);
+        const results = await transports.closeAll();
+        logSessionCloseResults("server_shutdown", results);
+        processSessions.shutdown();
+        oauthProvider.close();
+        workspaceStore.close?.();
+      })();
+      return closePromise;
     },
   };
 }
@@ -1460,14 +2268,27 @@ if (await isMainModule()) {
     console.log(`request logging: ${config.logging.requests ? "enabled" : "disabled"}`);
     console.log(`asset logging: ${config.logging.assets ? "enabled" : "disabled"}`);
     console.log(`trust proxy: ${config.logging.trustProxy ? "enabled" : "disabled"}`);
+    const artifactDownloadStatus = !config.artifactsEnabled
+      ? "disabled"
+      : isArtifactDownloadSupportedPlatform()
+        ? "enabled"
+        : `unsupported on ${process.platform}`;
+    console.log(`native artifact download: ${artifactDownloadStatus}`);
   });
 
-  const shutdown = () => {
-    httpServer.close(() => {
-      close();
-      process.exit(0);
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await shutdownHttpServer(httpServer, close);
+    process.exit(0);
+  };
+  const handleShutdown = () => {
+    void shutdown().catch((error) => {
+      console.error("devspace shutdown failed", error);
+      process.exit(1);
     });
   };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", handleShutdown);
+  process.once("SIGTERM", handleShutdown);
 }

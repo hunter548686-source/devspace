@@ -31,8 +31,15 @@ export function isPathInsideRoot(path: string, root: string): boolean {
   );
 }
 
-export function assertAllowedPath(path: string, allowedRoots: string[]): string {
+export function assertAllowedPath(
+  path: string,
+  allowedRoots: string[],
+  blockedRoots: string[] = [],
+): string {
   const resolvedPath = resolve(expandHomePath(path));
+  if (blockedRoots.some((root) => isPathInsideRoot(resolvedPath, root))) {
+    throw new AccessDeniedError(`Path is inside blocked root: ${path}`);
+  }
   if (allowedRoots.some((root) => isPathInsideRoot(resolvedPath, root))) {
     return resolvedPath;
   }
@@ -40,7 +47,12 @@ export function assertAllowedPath(path: string, allowedRoots: string[]): string 
   throw new AccessDeniedError(`Path is outside allowed roots: ${path}`);
 }
 
-export function resolveAllowedPath(inputPath: string, cwd: string, allowedRoots: string[]): string {
+export function resolveAllowedPath(
+  inputPath: string,
+  cwd: string,
+  allowedRoots: string[],
+  blockedRoots: string[] = [],
+): string {
   const absolutePath = resolve(cwd, inputPath);
-  return assertAllowedPath(absolutePath, allowedRoots);
+  return assertAllowedPath(absolutePath, allowedRoots, blockedRoots);
 }

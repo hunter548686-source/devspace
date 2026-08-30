@@ -17,6 +17,11 @@ const migrations: Migration[] = [
     name: "oauth-state",
     up: migrateOAuthState,
   },
+  {
+    version: 4,
+    name: "workspace-conversation-bindings",
+    up: migrateWorkspaceConversationBindings,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -135,6 +140,25 @@ function migrateOAuthState(sqlite: Database.Database): void {
 
     create index if not exists oauth_refresh_tokens_expires_at_idx
       on oauth_refresh_tokens(expires_at);
+  `);
+}
+
+function migrateWorkspaceConversationBindings(sqlite: Database.Database): void {
+  sqlite.exec(`
+    create table if not exists workspace_conversation_bindings (
+      conversation_scope_id text not null,
+      target_key text not null,
+      workspace_session_id text not null,
+      created_at text not null,
+      last_used_at text not null,
+      primary key (conversation_scope_id, target_key),
+      foreign key (workspace_session_id)
+        references workspace_sessions(id)
+        on delete cascade
+    );
+
+    create index if not exists workspace_conversation_bindings_workspace_idx
+      on workspace_conversation_bindings(workspace_session_id);
   `);
 }
 
