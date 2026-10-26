@@ -48,7 +48,7 @@ Core constraints:
 
 <!-- BEGIN MANAGED PROJECT GOVERNANCE -->
 Owner standing authorization: see the Owner 常设授权与边界 section in the global AGENTS.md; it overrides stricter generic clauses here.
-Policy: project-governance@5.5.0
+Policy: project-governance@6.0.0
 Constitution: PGS-000@1.1 (FROZEN)
 Project ID: devspace
 Canonical root: /Users/liheng/Codex project/New project/devspace
@@ -61,7 +61,7 @@ Identity/brand/UI/structural contract work: apply PML-001@1.0 from Policy#projec
 Task scope: authorized inspection covers bounded read-only checks; authorized repair covers related local changes and validation within applicable project controls. Explicit scope may cover named isolated non-production operations; material product/architecture/data-boundary changes still need an Owner decision.
 Local Git: use Policy's pre-approved staged-diff review flow for an authorized implementation task: review the diff and selected staged diff, commit only this task's changes, and preserve unrelated staged work. No automatic amend/reset/stash or remote action; commits outside this flow require explicit authorization.
 External actions: production deploy/restart/configuration and release require current-task explicit authorization or applicable Owner standing authorization for the same scope and limits, with rollback and a passed release gate. Push/merge/tag/history rewriting still require explicit approval; DNS/domain/certificate changes, production/user-data mutation, new account connections, customer-route opening, external sending/private uploads and paid operations remain subject to the Owner standing authorization exclusions and project product-safety rules.
-Authorization continuity: reuse valid same-task/scope approvals and already-authorized connections without rereading secrets or asking again. Reading a protected credential value still needs explicit authorization and must not expose it.
-Policy manifest SHA-256: 1fa4495d76523c8bd6fbf33ae8e14b663e7566f8c3ab15a14a216e31c39e386c
+Authorization continuity: reuse valid same-task/scope approvals and already-authorized connections without asking again. Owner-authorized tasks may use necessary non-production account passwords from the local credential directory for login or service calls without another confirmation. Never expose credential values or send them to external services; never read production credentials.
+Policy manifest SHA-256: 2eaec43eb037c28cb69b19dd69166d359c0256f0bde5a6ab19ef4e0628c81e46
 Generated block: do not edit manually.
 <!-- END MANAGED PROJECT GOVERNANCE -->
