@@ -48,7 +48,7 @@ Core constraints:
 
 <!-- BEGIN MANAGED PROJECT GOVERNANCE -->
 Owner standing authorization: see the Owner 常设授权与边界 section in the global AGENTS.md; it overrides stricter generic clauses here.
-Policy: project-governance@6.0.0
+Policy: project-governance@6.1.0
 Constitution: PGS-000@1.1 (FROZEN)
 Project ID: devspace
 Canonical root: /Users/liheng/Codex project/New project/devspace
@@ -57,11 +57,10 @@ Owner exception: existing-project PBOS stage authorization gates retired 2026-10
 Current authority: resolve mutable current product/governance/source/release/stage state from this canonical project's machine-readable CURRENT pointer/status record when present; never use a version hardcoded in AGENTS.md as the current selector. Versioned references are historical/frozen evidence unless selected by the current pointer.
 On demand: $project-governance and PGS-000@1.1 for scoped governance/release work. PBOS is used only when kk explicitly requests 新项目立项.
 Delivery/structure contract changes in foundry/shared-platform/standalone-product work: apply FSDM-001@1.0 from Policy#foundry_to_standalone_method after checking governance/FOUNDRY_TO_STANDALONE_DELIVERY_METHOD_CURRENT.json; default to runtime independence, maintain seven operational records, and require export, detachment, recovery and opt-in upgrade evidence for standalone acceptance. Bounded maintenance adds no seven-record requirement.
-Identity/brand/UI/structural contract work: apply PML-001@1.0 from Policy#project_master_lock_method; map durable decisions into the existing five slots and edit/re-render the same deterministic authoritative source. Require explicit Owner authorization for random structural generation; an explicit request for random exploration authorizes only that candidate batch. Preserve HARD_LOCK/CONTROLLED_CHANGE/EXPLORATION; candidates cannot replace FROZEN baselines.
 Task scope: authorized inspection covers bounded read-only checks; authorized repair covers related local changes and validation within applicable project controls. Explicit scope may cover named isolated non-production operations; material product/architecture/data-boundary changes still need an Owner decision.
 Local Git: use Policy's pre-approved staged-diff review flow for an authorized implementation task: review the diff and selected staged diff, commit only this task's changes, and preserve unrelated staged work. No automatic amend/reset/stash or remote action; commits outside this flow require explicit authorization.
 External actions: production deploy/restart/configuration and release require current-task explicit authorization or applicable Owner standing authorization for the same scope and limits, with rollback and a passed release gate. Push/merge/tag/history rewriting still require explicit approval; DNS/domain/certificate changes, production/user-data mutation, new account connections, customer-route opening, external sending/private uploads and paid operations remain subject to the Owner standing authorization exclusions and project product-safety rules.
 Authorization continuity: reuse valid same-task/scope approvals and already-authorized connections without asking again. Owner-authorized tasks may use necessary non-production account passwords from the local credential directory for login or service calls without another confirmation. Never expose credential values or send them to external services; never read production credentials.
-Policy manifest SHA-256: 2eaec43eb037c28cb69b19dd69166d359c0256f0bde5a6ab19ef4e0628c81e46
+Policy manifest SHA-256: 94f53c5b4ae0c85cbeee375caea6a4bf6fef194db246d27c09645df3e1311c39
 Generated block: do not edit manually.
 <!-- END MANAGED PROJECT GOVERNANCE -->
