@@ -46,21 +46,4 @@ Core constraints:
   runtime code, use `npm run source-authority:check`; release activation itself
   must enforce the guard and may only use a complete npm package inventory.
 
-<!-- BEGIN MANAGED PROJECT GOVERNANCE -->
-Owner standing authorization: see the Owner 常设授权与边界 section in the global AGENTS.md; it overrides stricter generic clauses here.
-Policy: project-governance@7.0.0
-Constitution: PGS-000@1.1 (FROZEN)
-Project ID: devspace
-Canonical root: /Users/liheng/Codex project/New project/devspace
-Default: minimal global rules + this project's own current rules/knowledge.
-Owner exception: existing-project PBOS stage authorization gates retired 2026-10-26; use PBOS only for explicit 新项目立项. Product safety and release gates remain effective.
-Current authority: resolve mutable current product/governance/source/release/stage state from this canonical project's machine-readable CURRENT pointer/status record when present; never use a version hardcoded in AGENTS.md as the current selector. Versioned references are historical/frozen evidence unless selected by the current pointer.
-On demand: $project-governance and PGS-000@1.1 for scoped governance/release work. PBOS is used only when kk explicitly requests 新项目立项.
-Delivery/structure contract changes in foundry/shared-platform/standalone-product work: apply FSDM-001@1.0 from Policy#foundry_to_standalone_method after checking governance/FOUNDRY_TO_STANDALONE_DELIVERY_METHOD_CURRENT.json; default to runtime independence, use role classification and seven operational records as optional references; require export, detachment, recovery and opt-in upgrade evidence for standalone acceptance. Bounded maintenance adds no seven-record requirement.
-Task scope: 只有 Owner 常设授权第 5 条的四类先问。安全规则和硬限制不变;已有同范围授权不重复问。
-Local Git: use Policy's pre-approved staged-diff review flow for an authorized implementation task: review the diff and selected staged diff, commit only this task's changes, and preserve unrelated staged work. Push within the authorized goal needs no separate approval; obey an explicit no-push instruction. No automatic amend/reset/stash/merge/tag or history rewriting.
-External actions: production deploy/restart/configuration and release require current-task explicit authorization or applicable Owner standing authorization for the same scope and limits, with rollback and a passed release gate. Merge/tag/history rewriting still require explicit approval; DNS/domain/certificate changes, production/user-data mutation, new account connections, customer-route opening, external sending/private uploads and paid operations remain subject to the Owner standing authorization exclusions and project product-safety rules.
-Authorization continuity: reuse valid same-task/scope approvals and already-authorized connections without asking again. Owner-authorized tasks may use necessary non-production account passwords, tokens and API keys from the local credential directory for login or service calls without another confirmation. Never expose credential values or send them to external services; never read production credentials.
-Policy manifest SHA-256: ec2842f664c8b5b7ea2acd15802672ffdaae111b3a8b105895f7645cc5ed4d89
-Generated block: do not edit manually.
-<!-- END MANAGED PROJECT GOVERNANCE -->
+规则:只看 `/Users/liheng/Codex project/New project/SAFETY.md`(安全底线和 kk 的规矩)。受管块、续跑循环、PBOS、版本指针和哈希核对已于 2026-10-27 取消。
