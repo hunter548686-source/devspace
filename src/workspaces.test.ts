@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import fs from "node:fs";
+import fsPromises, { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { addAbortSignal, PassThrough } from "node:stream";
 import { promisify } from "node:util";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { SqliteWorkspaceStore } from "./workspace-store.js";
@@ -184,6 +187,191 @@ test("a symlinked allowed root preserves checkout behavior and still rejects wor
   );
 });
 
+test("a descendant Darwin scandir deadlock leaves a readable workspace and clears a reused mutation baseline", { skip: platform() !== "darwin" }, async (t) => {
+  const context = await fixture(t);
+  await mkdir(join(context.root, "Unavailable.app"));
+  const bundlePath = await realpath(join(context.root, "Unavailable.app"));
+  const store = new SqliteWorkspaceStore(join(context.root, ".devspace", "state"));
+  const registry = new WorkspaceRegistry(context.config, store);
+  const options = { conversationScopeId: "dataless-reopen" };
+
+  try {
+    const first = await registry.openWorkspace(context.root, options);
+    assert.ok(first.workspace.mutationFingerprint);
+    let unavailable = true;
+    const deadlock = Object.assign(new Error("Unknown system error -11"), {
+      code: "Unknown system error -11",
+      errno: -11,
+      syscall: "scandir",
+      path: bundlePath,
+    });
+    mockDirectoryRead(t, (path) => unavailable && path === bundlePath ? deadlock : undefined);
+
+    const reopened = await registry.openWorkspace(context.root, options);
+    assert.equal(reopened.workspace.id, first.workspace.id);
+    assert.equal(reopened.workspace.mutationFingerprint, undefined);
+    assert.match(reopened.workspace.mutationFingerprintProblem ?? "", /Unavailable\.app/);
+    const readablePath = registry.resolveReadPath(reopened.workspace, "nested/file.txt");
+    assert.equal(await readFile(readablePath.absolutePath, "utf8"), "hello\n");
+    let actionRan = false;
+    await assert.rejects(
+      () => registry.runMutation(reopened.workspace, "test mutation", async () => { actionRan = true; }),
+      /WORKSPACE_BASELINE_UNAVAILABLE/,
+    );
+    assert.equal(actionRan, false);
+
+    unavailable = false;
+    const recovered = await registry.openWorkspace(context.root, options);
+    assert.equal(recovered.workspace.id, first.workspace.id);
+    assert.ok(recovered.workspace.mutationFingerprint);
+    assert.equal(recovered.workspace.mutationFingerprintProblem, undefined);
+    await registry.runMutation(recovered.workspace, "test mutation", async () => { actionRan = true; });
+    assert.equal(actionRan, true);
+  } finally {
+    store.close();
+  }
+});
+
+test("a dataless descendant also tolerates deferred directory-iterator errors during context discovery", { skip: platform() !== "darwin" }, async (t) => {
+  const context = await fixture(t);
+  await mkdir(join(context.root, "Unavailable.app"));
+  const bundlePath = await realpath(join(context.root, "Unavailable.app"));
+  const deadlock = Object.assign(new Error("Unknown system error -11"), {
+    code: "Unknown system error -11", errno: -11, syscall: "readdir",
+  });
+  mockDirectoryRead(t, (path) => path === bundlePath ? deadlock : undefined);
+  const originalOpendir = fsPromises.opendir;
+  t.mock.method(fsPromises, "opendir", async (...args: unknown[]) => {
+    const handle = await Reflect.apply(originalOpendir, fsPromises, args);
+    if (await realpath(String(args[0])) !== bundlePath) return handle;
+    return {
+      async *[Symbol.asyncIterator]() {
+        try { throw deadlock; }
+        finally { await handle.close(); }
+      },
+    };
+  });
+  syncBuiltinESMExports();
+
+  const opened = await context.registry.openWorkspace(context.root);
+  assert.equal(opened.workspace.mutationFingerprint, undefined);
+  assert.match(opened.workspace.mutationFingerprintProblem ?? "", /Unavailable\.app/);
+  assert.deepEqual(opened.availableAgentsFiles.map((file) => file.path), [
+    join(context.root, "nested", "AGENTS.md"),
+  ]);
+});
+
+test("an unreadable root and unrelated descendant errors still fail workspace opening", async (t) => {
+  const context = await fixture(t);
+  const rootError = Object.assign(new Error("root is unreadable"), {
+    code: "EDEADLK", errno: -11, syscall: "opendir", path: context.root,
+  });
+  const originalOpendir = fsPromises.opendir;
+  t.mock.method(fsPromises, "opendir", async (...args: unknown[]) => {
+    if (String(args[0]) === context.root) throw rootError;
+    return Reflect.apply(originalOpendir, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(() => context.registry.openWorkspace(context.root), (error) => error === rootError);
+
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  const childError = Object.assign(new Error("child access denied"), {
+    code: "EACCES", errno: -13, syscall: "scandir", path: await realpath(join(context.root, "nested")),
+  });
+  mockDirectoryRead(t, (path) => path === childError.path ? childError : undefined);
+  await assert.rejects(() => context.registry.openWorkspace(context.root), (error) => error === childError);
+});
+
+test("a slow initial scan stops traversal without publishing a partial baseline", async (t) => {
+  const context = await fixture(t);
+  const slowDirectory = join(context.root, "000-slow");
+  const laterDirectory = join(context.root, "zzz-not-visited");
+  await mkdir(slowDirectory);
+  await mkdir(laterDirectory);
+  const physicalSlowDirectory = await realpath(slowDirectory);
+  const physicalLaterDirectory = await realpath(laterDirectory);
+  const originalReaddir = fsPromises.readdir;
+  let laterVisited = false;
+  t.mock.method(fsPromises, "readdir", async (...args: unknown[]) => {
+    if (String(args[0]) === physicalSlowDirectory) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_200));
+    }
+    if (String(args[0]) === physicalLaterDirectory) laterVisited = true;
+    return Reflect.apply(originalReaddir, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  const started = performance.now();
+  const opened = await context.registry.openWorkspace(context.root);
+  assert.ok(performance.now() - started < 5_000);
+  assert.equal(opened.workspace.mutationFingerprint, undefined);
+  assert.match(opened.workspace.mutationFingerprintProblem ?? "", /time budget/);
+  assert.equal(laterVisited, false);
+  await assert.rejects(
+    () => context.registry.runMutation(opened.workspace, "test mutation", async () => {}),
+    /WORKSPACE_BASELINE_UNAVAILABLE/,
+  );
+});
+
+test("the initial scan deadline aborts active file streams", async (t) => {
+  const context = await fixture(t);
+  const slowFile = join(context.root, "000-slow.txt");
+  await writeFile(slowFile, "slow content\n");
+  const physicalSlowFile = await realpath(slowFile);
+  const originalCreateReadStream = fs.createReadStream;
+  let pendingStream: PassThrough | undefined;
+  t.mock.method(fs, "createReadStream", (...args: unknown[]) => {
+    if (String(args[0]) !== physicalSlowFile) return Reflect.apply(originalCreateReadStream, fs, args);
+    const options = args[1] as { signal?: AbortSignal } | undefined;
+    pendingStream = new PassThrough();
+    if (options?.signal) addAbortSignal(options.signal, pendingStream);
+    // Keep a broken implementation's red test finite.
+    const fallback = setTimeout(() => pendingStream?.end("slow content\n"), 3_000);
+    t.after(() => clearTimeout(fallback));
+    return pendingStream;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+
+  const opened = await context.registry.openWorkspace(context.root);
+  assert.equal(opened.workspace.mutationFingerprint, undefined);
+  assert.match(opened.workspace.mutationFingerprintProblem ?? "", /time budget/);
+  assert.equal(pendingStream?.destroyed, true);
+});
+
+test("local application bundle contents remain covered by the mutation guard", async (t) => {
+  const context = await fixture(t);
+  const bundleContents = join(context.root, "Local.app", "Contents", "Resources");
+  await mkdir(bundleContents, { recursive: true });
+  const resource = join(bundleContents, "data.txt");
+  await writeFile(resource, "before\n");
+  const opened = await context.registry.openWorkspace(context.root);
+  await writeFile(resource, "after!\n");
+  let actionRan = false;
+  await assert.rejects(
+    () => context.registry.runMutation(opened.workspace, "test mutation", async () => { actionRan = true; }),
+    /WORKSPACE_CHANGED_EXTERNALLY/,
+  );
+  assert.equal(actionRan, false);
+});
+
+function mockDirectoryRead(
+  t: TestContext,
+  errorForPath: (path: string) => Error | undefined,
+): void {
+  const originalReaddir = fsPromises.readdir;
+  t.mock.method(fsPromises, "readdir", async (...args: unknown[]) => {
+    const error = errorForPath(String(args[0]));
+    if (error) throw error;
+    return Reflect.apply(originalReaddir, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+}
+
 interface WorkspaceFixture {
   root: string;
   outsideRoot: string;
@@ -210,6 +398,10 @@ async function fixture(t: TestContext): Promise<WorkspaceFixture> {
   await mkdir(join(root, "nested"));
   await writeFile(join(root, "nested", "AGENTS.md"), "nested instructions\n");
   await writeFile(join(root, "nested", "file.txt"), "hello\n");
+  await mkdir(join(root, "env_uv"));
+  await writeFile(join(root, "env_uv", "AGENTS.md"), "generated environment instructions\n");
+  await mkdir(join(root, "_devspace_mounts"));
+  await writeFile(join(root, "_devspace_mounts", "AGENTS.md"), "mounted workspace instructions\n");
 
   const config = loadConfig({
     DEVSPACE_CONFIG_DIR: join(root, ".devspace-home"),

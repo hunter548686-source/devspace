@@ -81,6 +81,52 @@ test("open_project resolves a registered project to the same physical workspace"
   assert.equal(structuredContent(repeated).workspaceId, structuredContent(opened).workspaceId);
 });
 
+test("degraded opens expose the baseline diagnostic on both entry points and preserve read access", async (t) => {
+  const context = await fixture(t, { git: true, widgets: "changes" });
+  const originalOpen = WorkspaceRegistry.prototype.openWorkspace;
+  t.mock.method(WorkspaceRegistry.prototype, "openWorkspace", async function (
+    this: WorkspaceRegistry,
+    ...args: Parameters<WorkspaceRegistry["openWorkspace"]>
+  ) {
+    const opened = await Reflect.apply(originalOpen, this, args);
+    opened.workspace.mutationFingerprint = undefined;
+    opened.workspace.mutationFingerprintProblem = "Test scan exceeded its time budget.";
+    return opened;
+  });
+
+  for (const entry of ["workspace", "project"] as const) {
+    const open = () => entry === "workspace"
+      ? callOpen(context.client, context.project, "degraded-workspace")
+      : callOpenProject(context.client, "fixture-project", "new", "degraded-project");
+    const first = await open();
+    const repeated = await open();
+    for (const result of [first, repeated]) {
+      assert.equal(result.isError, undefined);
+      assert.match(responseText(result), /WORKSPACE_BASELINE_UNAVAILABLE/);
+      assert.match(String(structuredContent(result).instruction), /WORKSPACE_BASELINE_UNAVAILABLE/);
+      assert.match(String(responseCard(result).instruction), /WORKSPACE_BASELINE_UNAVAILABLE/);
+    }
+    const workspaceId = structuredContent(first).workspaceId;
+    const readable = await context.client.callTool({
+      name: "read",
+      arguments: { workspaceId, path: "AGENTS.md" },
+    });
+    assert.equal(readable.isError, undefined);
+    assert.match(responseText(readable), /project instructions/);
+    const blocked = await context.client.callTool({
+      name: "bash",
+      arguments: { workspaceId, command: "echo mutation-must-not-run" },
+    });
+    assert.equal(blocked.isError, true);
+    assert.match(responseText(blocked), /WORKSPACE_BASELINE_UNAVAILABLE/);
+  }
+
+  const refs = await execFileAsync("git", [
+    "for-each-ref", "--format=%(refname)", "refs/devspace/review",
+  ], { cwd: context.project });
+  assert.equal(refs.stdout, "", "degraded opening must not start a full review snapshot");
+});
+
 test("open_project fails closed for an unknown registered project", async (t) => {
   const context = await fixture(t);
   const result = await callOpenProject(context.client, "missing-project", "new", "chat-project");
@@ -339,6 +385,7 @@ async function fixture(
   t: TestContext,
   options: {
     git?: boolean;
+    widgets?: "full" | "changes";
     toolMode?: "full" | "codex";
     unifiedProjectWorkspace?: boolean;
     externalRepositoryEnabled?: boolean;
@@ -395,7 +442,7 @@ async function fixture(
     DEVSPACE_ALLOWED_ROOTS: root,
     DEVSPACE_WORKTREE_ROOT: join(root, ".worktrees"),
     DEVSPACE_AGENT_DIR: agentDir,
-    DEVSPACE_WIDGETS: "full",
+    DEVSPACE_WIDGETS: options.widgets ?? "full",
     DEVSPACE_TOOL_MODE: options.toolMode ?? "full",
     DEVSPACE_UNIFIED_PROJECT_WORKSPACE:
       options.unifiedProjectWorkspace === false ? "0" : "1",

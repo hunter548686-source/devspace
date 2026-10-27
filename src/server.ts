@@ -60,7 +60,7 @@ import { openAiConversationScopeId } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
 import { createWorkspaceStore } from "./workspace-store.js";
-import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
+import { formatAgentsPath, workspaceBaselineInstruction, WorkspaceRegistry } from "./workspaces.js";
 
 type Transport = StreamableHTTPServerTransport;
 // MCP clients can reconnect without closing the previous transport. Bound stale
@@ -878,7 +878,7 @@ export function createMcpServer(
           { path: resolution.selectedPath, mode: "checkout" },
           { conversationScopeId: openAiConversationScopeId(_meta) },
         );
-        if (config.widgets === "changes") {
+        if (config.widgets === "changes" && !workspace.mutationFingerprintProblem) {
           await reviewCheckpoints.initializeWorkspace({
             workspaceId: workspace.id,
             root: workspace.root,
@@ -901,15 +901,17 @@ export function createMcpServer(
         const visibleSkills = includeBootstrapContext ? cardSkills : [];
         const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
         const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
-        const cardInstruction = config.skillsEnabled
+        const baselineInstruction = workspaceBaselineInstruction(workspace);
+        const cardInstruction = [config.skillsEnabled
           ? "This workspace is bound to the returned projectId. Reuse this workspaceId for the exact selected physical directory. Follow loaded agentsFiles instructions, read applicable nested instruction files, and read matching skills before proceeding. Do not switch to another project path without a new open_project resolution."
-          : "This workspace is bound to the returned projectId. Reuse this workspaceId for the exact selected physical directory. Follow loaded agentsFiles instructions and read applicable nested instruction files before proceeding. Do not switch to another project path without a new open_project resolution.";
+          : "This workspace is bound to the returned projectId. Reuse this workspaceId for the exact selected physical directory. Follow loaded agentsFiles instructions and read applicable nested instruction files before proceeding. Do not switch to another project path without a new open_project resolution.", baselineInstruction].filter(Boolean).join("\n\n");
         const instruction = workspaceReused
           ? [
               `Workspace already open as ${workspace.id}.`,
               `Project ${resolution.projectId ?? project} remains bound to ${workspace.root}.`,
               "Reuse this workspaceId and continue following the project context previously supplied for this physical directory.",
-            ].join("\n\n")
+              baselineInstruction,
+            ].filter(Boolean).join("\n\n")
           : cardInstruction;
         const result = [
           workspaceReused
@@ -1046,7 +1048,7 @@ export function createMcpServer(
         { path, mode },
         { conversationScopeId: openAiConversationScopeId(_meta) },
       );
-      if (config.widgets === "changes") {
+      if (config.widgets === "changes" && !workspace.mutationFingerprintProblem) {
         await reviewCheckpoints.initializeWorkspace({
           workspaceId: workspace.id,
           root: workspace.root,
@@ -1069,15 +1071,17 @@ export function createMcpServer(
       const visibleSkills = includeBootstrapContext ? cardSkills : [];
       const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
       const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
-      const cardInstruction = config.skillsEnabled
+      const baselineInstruction = workspaceBaselineInstruction(workspace);
+      const cardInstruction = [config.skillsEnabled
         ? "Use this workspaceId in all subsequent tool calls for this exact project directory. Do not call open_workspace again for the same directory unless this workspaceId stops working. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
-        : "Use this workspaceId in all subsequent tool calls for this exact project directory. Do not call open_workspace again for the same directory unless this workspaceId stops working. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.";
+        : "Use this workspaceId in all subsequent tool calls for this exact project directory. Do not call open_workspace again for the same directory unless this workspaceId stops working. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file.", baselineInstruction].filter(Boolean).join("\n\n");
       const instruction = workspaceReused
         ? [
             `Workspace already open as ${workspace.id}.`,
             "Reuse this workspaceId for subsequent tool calls. This is the same physical directory previously opened in this conversation.",
             "Continue following the project instructions, nested instruction files, skills, and diagnostics previously provided for this workspace. They remain the active workspace context and are not repeated here.",
-          ].join("\n\n")
+            baselineInstruction,
+          ].filter(Boolean).join("\n\n")
         : cardInstruction;
       const resultContent: ToolContent[] = [
         {

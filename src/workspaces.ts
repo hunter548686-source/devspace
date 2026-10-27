@@ -27,6 +27,8 @@ import {
 } from "./skills.js";
 
 const execFileAsync = promisify(execFile);
+const FILESYSTEM_FINGERPRINT_CONTENT_HASH_LIMIT_BYTES = 4 * 1024 * 1024;
+const INITIAL_WORKSPACE_SCAN_BUDGET_MS = 2_000;
 
 export interface LoadedAgentsFile {
   path: string;
@@ -56,6 +58,7 @@ export interface Workspace {
   skillDiagnostics: LoadedSkills["diagnostics"];
   activatedSkillDirs: Set<string>;
   mutationFingerprint?: string;
+  mutationFingerprintProblem?: string;
 }
 
 export interface WorkspaceContext {
@@ -231,7 +234,7 @@ export class WorkspaceRegistry {
   }
 
   private async reusedWorkspaceContext(workspace: Workspace): Promise<WorkspaceContext> {
-    workspace.mutationFingerprint = await workspaceMutationFingerprint(workspace.root);
+    Object.assign(workspace, await initialWorkspaceBaseline(workspace.root));
     const agentsFiles = await this.loadInitialAgentsFiles(workspace.root);
     const availableAgentsFiles = await this.findAvailableAgentsFiles(workspace.root, agentsFiles);
 
@@ -317,6 +320,9 @@ export class WorkspaceRegistry {
     await previous.catch(() => undefined);
     let currentFingerprint: string;
     try {
+      if (!workspace.mutationFingerprint && workspace.mutationFingerprintProblem) {
+        throw new Error(workspaceBaselineInstruction(workspace));
+      }
       if (!workspace.mutationFingerprint) {
         throw new Error(
           `WORKSPACE_REFRESH_REQUIRED: ${operation} cannot run because the workspace baseline is unavailable. Reopen the exact same workspace, reread the affected files, and retry.`,
@@ -472,7 +478,7 @@ export class WorkspaceRegistry {
       worktree: input.worktree,
       ...this.loadSkillsForWorkspace(input.root),
       activatedSkillDirs: new Set(),
-      mutationFingerprint: await workspaceMutationFingerprint(input.root),
+      ...await initialWorkspaceBaseline(input.root),
     };
 
     this.store?.createSession({
@@ -569,14 +575,53 @@ export class WorkspaceRegistry {
   }
 }
 
-async function workspaceMutationFingerprint(root: string): Promise<string> {
+class WorkspaceBaselineUnavailableError extends Error {}
+
+type WorkspaceBaseline = Pick<Workspace, "mutationFingerprint" | "mutationFingerprintProblem">;
+
+async function initialWorkspaceBaseline(root: string): Promise<WorkspaceBaseline> {
+  // A root that cannot be listed is not a usable read workspace. Keep this
+  // outside the recoverable descendant/deadline handling, including on reopen.
+  const rootHandle = await opendir(root);
+  await rootHandle.close();
+
+  const controller = new AbortController();
+  const deadlineError = new WorkspaceBaselineUnavailableError(
+    `The initial workspace scan exceeded its ${INITIAL_WORKSPACE_SCAN_BUDGET_MS} ms time budget.`,
+  );
+  const deadline = setTimeout(() => controller.abort(deadlineError), INITIAL_WORKSPACE_SCAN_BUDGET_MS);
+  try {
+    const mutationFingerprint = await workspaceMutationFingerprint(root, controller.signal);
+    controller.signal.throwIfAborted();
+    return { mutationFingerprint, mutationFingerprintProblem: undefined };
+  } catch (error) {
+    const problem = controller.signal.aborted && isErrnoException(error) && error.code === "ABORT_ERR"
+      ? controller.signal.reason
+      : error;
+    if (!(problem instanceof WorkspaceBaselineUnavailableError)) throw error;
+    return {
+      mutationFingerprint: undefined,
+      mutationFingerprintProblem: problem.message,
+    };
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
+export function workspaceBaselineInstruction(workspace: Workspace): string | undefined {
+  if (!workspace.mutationFingerprintProblem) return undefined;
+  return `WORKSPACE_BASELINE_UNAVAILABLE: ${workspace.mutationFingerprintProblem} This directory is open for read, ls, glob, and grep. Edit, write, bash, and other mutations require a complete baseline; open the exact smaller existing project directory to use them. Reopen this directory after the underlying scan issue is resolved to restore its mutation baseline.`;
+}
+
+async function workspaceMutationFingerprint(root: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const physicalRoot = (await tryRealpath(root)) ?? resolve(root);
-  const gitRootOutput = await gitOutput(root, ["rev-parse", "--show-toplevel"]);
+  const gitRootOutput = await gitOutput(root, ["rev-parse", "--show-toplevel"], signal);
 
   if (gitRootOutput !== undefined) {
     const gitRoot = gitRootOutput.trim();
-    const head = ((await gitOutput(root, ["rev-parse", "--verify", "HEAD^{commit}"])) ?? "UNBORN").trim();
-    const branch = ((await gitOutput(root, ["symbolic-ref", "--quiet", "HEAD"])) ?? "DETACHED").trim();
+    const head = ((await gitOutput(root, ["rev-parse", "--verify", "HEAD^{commit}"], signal)) ?? "UNBORN").trim();
+    const branch = ((await gitOutput(root, ["symbolic-ref", "--quiet", "HEAD"], signal)) ?? "DETACHED").trim();
     const status = (await gitOutput(root, [
       "status",
       "--porcelain=v1",
@@ -584,15 +629,32 @@ async function workspaceMutationFingerprint(root: string): Promise<string> {
       "--untracked-files=all",
       "--",
       ".",
-    ])) ?? "GIT_STATUS_UNAVAILABLE";
+    ], signal)) ?? "GIT_STATUS_UNAVAILABLE";
     const stagedState = head === "UNBORN"
-      ? (await gitOutput(root, ["ls-files", "--stage", "-z", "--", "."])) ?? "GIT_INDEX_UNAVAILABLE"
-      : (await gitOutput(root, ["diff", "--cached", "--raw", "-z", "HEAD", "--", "."]))
+      ? (await gitOutput(root, ["ls-files", "--stage", "-z", "--", "."], signal)) ?? "GIT_INDEX_UNAVAILABLE"
+      : (await gitOutput(root, ["diff", "--cached", "--raw", "-z", "HEAD", "--", "."], signal))
         ?? "GIT_INDEX_UNAVAILABLE";
-    const changedPaths = await gitChangedPaths(root, head);
-    const changedPathState = await Promise.all(
-      changedPaths.map((path) => workspacePathState(root, path)),
-    );
+    const changedPaths = await gitChangedPaths(root, head, signal);
+    const changedPathState: string[] = [];
+    if (signal) {
+      // Bound initial-scan concurrency so a huge Git archive cannot enqueue an
+      // unbounded number of file reads before the deadline gets a chance to run.
+      for (let index = 0; index < changedPaths.length; index += 32) {
+        signal.throwIfAborted();
+        const states = await Promise.allSettled(
+          changedPaths.slice(index, index + 32).map((path) => workspacePathState(root, path, signal)),
+        );
+        for (const state of states) {
+          if (state.status === "rejected") throw state.reason;
+          changedPathState.push(state.value);
+        }
+      }
+    } else {
+      changedPathState.push(...await Promise.all(
+        changedPaths.map((path) => workspacePathState(root, path)),
+      ));
+    }
+    signal?.throwIfAborted();
 
     return createHash("sha256")
       .update([
@@ -608,24 +670,40 @@ async function workspaceMutationFingerprint(root: string): Promise<string> {
       .digest("hex");
   }
 
-  return filesystemTreeFingerprint(physicalRoot);
+  return filesystemTreeFingerprint(physicalRoot, signal);
 }
 
-async function filesystemTreeFingerprint(root: string): Promise<string> {
+async function filesystemTreeFingerprint(root: string, signal?: AbortSignal): Promise<string> {
   const fingerprint = createHash("sha256");
   fingerprint.update(`filesystem\0${root}\0`);
 
   const walk = async (directory: string, relativeDirectory: string): Promise<void> => {
-    const entries = await readdir(directory, { withFileTypes: true });
+    signal?.throwIfAborted();
+    const entries = await readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
+      if (
+        signal
+        && directory !== root
+        && isDarwinDirectoryDeadlock(error)
+      ) {
+        throw new WorkspaceBaselineUnavailableError(
+          `The descendant directory "${relativeDirectory}" could not be listed (macOS EDEADLK, errno 11).`,
+          { cause: error },
+        );
+      }
+      throw error;
+    });
+    signal?.throwIfAborted();
     entries.sort((left, right) => left.name.localeCompare(right.name));
 
     for (const entry of entries) {
+      signal?.throwIfAborted();
       if (entry.isDirectory() && SKIPPED_FINGERPRINT_DIRS.has(entry.name)) continue;
       const path = join(directory, entry.name);
       const relativePath = relativeDirectory
         ? join(relativeDirectory, entry.name)
         : entry.name;
       const before = await lstat(path, { bigint: true });
+      signal?.throwIfAborted();
       const type = before.isFile()
         ? "file"
         : before.isDirectory()
@@ -638,11 +716,16 @@ async function filesystemTreeFingerprint(root: string): Promise<string> {
         type,
         String(before.mode),
         String(before.size),
+        String(before.dev),
+        String(before.ino),
+        String(before.mtimeNs),
+        String(before.ctimeNs),
       ].join("\0"));
       fingerprint.update("\0");
 
       if (before.isSymbolicLink()) {
         fingerprint.update(await readlink(path));
+        signal?.throwIfAborted();
         fingerprint.update("\0");
         continue;
       }
@@ -652,9 +735,26 @@ async function filesystemTreeFingerprint(root: string): Promise<string> {
       }
       if (!before.isFile()) continue;
 
-      const content = createHash("sha256");
-      for await (const chunk of createReadStream(path)) content.update(chunk as Buffer);
+      const shouldHashContent = before.size <= BigInt(FILESYSTEM_FINGERPRINT_CONTENT_HASH_LIMIT_BYTES);
+      let content = shouldHashContent ? createHash("sha256") : undefined;
+      if (content) {
+        try {
+          for await (const chunk of createReadStream(path, { signal })) {
+            signal?.throwIfAborted();
+            content.update(chunk as Buffer);
+          }
+        } catch (error) {
+          signal?.throwIfAborted();
+          if (isErrnoException(error) && (error.code === "EDEADLK" || error.errno === -11)) {
+            content = undefined;
+          } else {
+            throw error;
+          }
+        }
+      }
+      signal?.throwIfAborted();
       const after = await lstat(path, { bigint: true });
+      signal?.throwIfAborted();
       if (
         !after.isFile()
         || after.dev !== before.dev
@@ -665,19 +765,22 @@ async function filesystemTreeFingerprint(root: string): Promise<string> {
       ) {
         throw new Error(`WORKSPACE_FINGERPRINT_UNSTABLE: ${relativePath} changed while it was being inspected.`);
       }
-      fingerprint.update(content.digest());
-      fingerprint.update("\0");
+      if (content) {
+        fingerprint.update(content.digest());
+        fingerprint.update("\0");
+      }
     }
   };
 
   await walk(root, "");
+  signal?.throwIfAborted();
   return fingerprint.digest("hex");
 }
 
-async function gitChangedPaths(root: string, head: string): Promise<string[]> {
+async function gitChangedPaths(root: string, head: string, signal?: AbortSignal): Promise<string[]> {
   const trackedOutput = head === "UNBORN"
-    ? await gitOutput(root, ["ls-files", "-m", "-d", "-z", "--", "."])
-    : await gitOutput(root, ["diff", "--name-only", "--relative", "-z", "HEAD", "--", "."]);
+    ? await gitOutput(root, ["ls-files", "-m", "-d", "-z", "--", "."], signal)
+    : await gitOutput(root, ["diff", "--name-only", "--relative", "-z", "HEAD", "--", "."], signal);
   const untrackedOutput = await gitOutput(root, [
     "ls-files",
     "--others",
@@ -685,7 +788,7 @@ async function gitChangedPaths(root: string, head: string): Promise<string[]> {
     "-z",
     "--",
     ".",
-  ]);
+  ], signal);
 
   return Array.from(new Set([
     ...nulSeparatedPaths(trackedOutput),
@@ -697,12 +800,14 @@ function nulSeparatedPaths(output: string | undefined): string[] {
   return output?.split("\0").filter(Boolean) ?? [];
 }
 
-async function workspacePathState(root: string, path: string): Promise<string> {
+async function workspacePathState(root: string, path: string, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   const absolutePath = resolve(root, path);
   if (!isPathInsideRoot(absolutePath, root)) return `${path}\0OUTSIDE_ROOT`;
 
   try {
     const pathStats = await lstat(absolutePath, { bigint: true });
+    signal?.throwIfAborted();
     const type = pathStats.isFile()
       ? "file"
       : pathStats.isDirectory()
@@ -715,10 +820,11 @@ async function workspacePathState(root: string, path: string): Promise<string> {
       contentIdentity = await readlink(absolutePath);
     } else if (pathStats.isFile() && pathStats.size <= BigInt(1024 * 1024)) {
       contentIdentity = createHash("sha256")
-        .update(await readFile(absolutePath))
+        .update(await readFile(absolutePath, { signal }))
         .digest("hex");
     }
 
+    signal?.throwIfAborted();
     return [
       path,
       type,
@@ -736,15 +842,19 @@ async function workspacePathState(root: string, path: string): Promise<string> {
   }
 }
 
-async function gitOutput(root: string, args: string[]): Promise<string | undefined> {
+async function gitOutput(root: string, args: string[], signal?: AbortSignal): Promise<string | undefined> {
+  signal?.throwIfAborted();
   try {
     const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
       encoding: "utf8",
       timeout: 15_000,
       maxBuffer: 32 * 1024 * 1024,
+      signal,
     });
+    signal?.throwIfAborted();
     return stdout;
   } catch {
+    signal?.throwIfAborted();
     return undefined;
   }
 }
@@ -770,14 +880,34 @@ async function canonicalPath(path: string): Promise<string> {
 }
 
 const CONTEXT_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
+const MAX_CONTEXT_SCAN_DEPTH = 6;
+const MAX_CONTEXT_SCAN_DIRECTORIES = 2_000;
 const SKIPPED_CONTEXT_DIRS = new Set([
   ".git",
   ".hg",
   ".svn",
+  ".agent",
+  ".build",
   ".devspace",
+  ".gradle",
+  ".mypy_cache",
   "node_modules",
+  ".nox",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".tox",
+  ".venv",
+  "__pycache__",
   "dist",
   "build",
+  "env",
+  "env_uv",
+  "venv",
+  "vendor",
+  "Pods",
+  "target",
+  "_devspace_mounts",
+  "_worktrees",
   ".next",
   ".turbo",
   ".cache",
@@ -836,24 +966,53 @@ async function walkWorkspace(
   directory: string,
   visit: (path: string, entry: { name: string; isFile(): boolean; isDirectory(): boolean }) => Promise<void> | void,
 ): Promise<void> {
-  let entries;
-  try {
-    entries = await opendir(directory);
-  } catch {
-    return;
-  }
+  const queue: Array<{ directory: string; depth: number }> = [{ directory, depth: 0 }];
+  let visitedDirectories = 0;
 
-  for await (const entry of entries) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) {
-      if (!SKIPPED_CONTEXT_DIRS.has(entry.name)) {
-        await walkWorkspace(path, visit);
-      }
+  while (queue.length > 0 && visitedDirectories < MAX_CONTEXT_SCAN_DIRECTORIES) {
+    const current = queue.shift();
+    if (!current) break;
+    visitedDirectories += 1;
+
+    let handle;
+    try {
+      handle = await opendir(current.directory);
+    } catch {
       continue;
     }
 
-    await visit(path, entry);
+    const entries = [];
+    try {
+      for await (const entry of handle) entries.push(entry);
+    } catch (error) {
+      // macOS may open a dataless directory successfully and report EDEADLK
+      // only when its iterator is consumed. Other errors remain visible.
+      if (current.depth > 0 && isDarwinDirectoryDeadlock(error)) continue;
+      throw error;
+    }
+    entries.sort((left, right) => left.name.localeCompare(right.name));
+
+    for (const entry of entries) {
+      const path = join(current.directory, entry.name);
+      if (entry.isDirectory()) {
+        if (
+          current.depth < MAX_CONTEXT_SCAN_DEPTH
+          && !SKIPPED_CONTEXT_DIRS.has(entry.name)
+        ) {
+          queue.push({ directory: path, depth: current.depth + 1 });
+        }
+        continue;
+      }
+
+      await visit(path, entry);
+    }
   }
+}
+
+function isDarwinDirectoryDeadlock(error: unknown): boolean {
+  return process.platform === "darwin"
+    && isErrnoException(error)
+    && (error.code === "EDEADLK" || error.errno === -11);
 }
 
 function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
