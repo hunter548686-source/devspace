@@ -1,0 +1,3 @@
+DevSpace directory access verification, 2026-10-29 Australia/Melbourne.
+write=PASS
+edit=PASS
