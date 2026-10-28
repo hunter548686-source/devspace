@@ -59,6 +59,7 @@ export interface Workspace {
   activatedSkillDirs: Set<string>;
   mutationFingerprint?: string;
   mutationFingerprintProblem?: string;
+  fileBaselines?: Map<string, string>;
 }
 
 export interface WorkspaceContext {
@@ -255,8 +256,9 @@ export class WorkspaceRegistry {
     workspace: Workspace,
     operation: string,
     action: () => Promise<T>,
+    paths?: string[],
   ): Promise<T> {
-    const session = await this.acquireMutationSession(workspace, operation, false);
+    const session = await this.acquireMutationSession(workspace, operation, false, paths);
     let result: T;
     try {
       result = await action();
@@ -279,6 +281,7 @@ export class WorkspaceRegistry {
     workspace: Workspace,
     operation: string,
     exclusive: boolean,
+    paths?: string[],
   ): Promise<WorkspaceMutationSession> {
     const queueKey = await canonicalPath(workspace.root);
     const activeExclusive = this.exclusiveMutationReservations.get(queueKey);
@@ -320,8 +323,8 @@ export class WorkspaceRegistry {
     await previous.catch(() => undefined);
     let currentFingerprint: string;
     try {
-      if (!workspace.mutationFingerprint && workspace.mutationFingerprintProblem) {
-        throw new Error(workspaceBaselineInstruction(workspace));
+      if (workspace.mutationFingerprintProblem) {
+        return await this.scopedMutationSession(workspace, operation, paths, releaseSession);
       }
       if (!workspace.mutationFingerprint) {
         throw new Error(
@@ -362,6 +365,70 @@ export class WorkspaceRegistry {
       complete: () => settle(true),
       fail: () => settle(false),
     };
+  }
+
+  private async scopedPathState(workspace: Workspace, path: string): Promise<string> {
+    const absolutePath = this.resolvePath(workspace, path);
+    const physicalRoot = await canonicalPath(workspace.root);
+    let ancestor = absolutePath;
+    let physicalAncestor = await tryRealpath(ancestor);
+    while (!physicalAncestor && ancestor !== dirname(ancestor)) {
+      ancestor = dirname(ancestor);
+      physicalAncestor = await tryRealpath(ancestor);
+    }
+    const physicalPath = resolve(physicalAncestor ?? ancestor, relative(ancestor, absolutePath));
+    if (!isPathInsideRoot(physicalPath, physicalRoot)) {
+      throw new Error(`Path is outside workspace root: ${path}`);
+    }
+    return `${physicalPath}\0${await workspacePathState(physicalRoot, relative(physicalRoot, physicalPath))}`;
+  }
+
+  async captureReadBaseline(workspace: Workspace, readPath: WorkspaceReadPath): Promise<string | undefined> {
+    if (!workspace.mutationFingerprintProblem || readPath.skillRead) return undefined;
+    return this.scopedPathState(workspace, readPath.absolutePath);
+  }
+
+  private async scopedMutationSession(
+    workspace: Workspace,
+    operation: string,
+    paths: string[] | undefined,
+    release: () => void,
+  ): Promise<WorkspaceMutationSession> {
+    const baselines = workspace.fileBaselines ??= new Map();
+    const targets = paths
+      ? [...new Set(paths.map((path) => this.resolvePath(workspace, path)))]
+      : [...baselines.keys()];
+    const before = new Map<string, string>();
+    for (const path of targets) {
+      const current = await this.scopedPathState(workspace, path);
+      const expected = baselines.get(path);
+      if (expected === undefined && !current.endsWith("\0MISSING")) {
+        throw new Error(`WORKSPACE_FILE_READ_REQUIRED: Read "${relative(workspace.root, path)}" before ${operation} so its current contents can be checked.`);
+      }
+      if (expected !== undefined && current !== expected) {
+        throw new Error(`WORKSPACE_CHANGED_EXTERNALLY: "${relative(workspace.root, path)}" changed after it was read. Reread this file and retry ${operation}.`);
+      }
+      before.set(path, current);
+    }
+    let finalization: Promise<void> | undefined;
+    const settle = (completed: boolean): Promise<void> => {
+      finalization ??= (async () => {
+        try {
+          for (const [path, original] of before) {
+            const current = await this.scopedPathState(workspace, path);
+            if (completed || current === original) baselines.set(path, current);
+            else baselines.delete(path);
+          }
+        } catch (error) {
+          for (const path of before.keys()) baselines.delete(path);
+          if (completed) throw error;
+        } finally {
+          release();
+        }
+      })();
+      return finalization;
+    };
+    return { complete: () => settle(true), fail: () => settle(false) };
   }
 
   getWorkspace(workspaceId: string): Workspace {
@@ -431,7 +498,14 @@ export class WorkspaceRegistry {
     }
   }
 
-  markReadPathLoaded(workspace: Workspace, readPath: WorkspaceReadPath): void {
+  async markReadPathLoaded(workspace: Workspace, readPath: WorkspaceReadPath, before?: string): Promise<void> {
+    if (before !== undefined) {
+      const after = await this.scopedPathState(workspace, readPath.absolutePath);
+      if (after !== before) {
+        throw new Error("WORKSPACE_CHANGED_EXTERNALLY: The file changed during read. Read it again before editing.");
+      }
+      (workspace.fileBaselines ??= new Map()).set(readPath.absolutePath, after);
+    }
     if (readPath.skillRead?.isSkillFile) {
       markSkillActivated(workspace.activatedSkillDirs, readPath.skillRead.skill);
     }
@@ -577,7 +651,7 @@ export class WorkspaceRegistry {
 
 class WorkspaceBaselineUnavailableError extends Error {}
 
-type WorkspaceBaseline = Pick<Workspace, "mutationFingerprint" | "mutationFingerprintProblem">;
+type WorkspaceBaseline = Pick<Workspace, "mutationFingerprint" | "mutationFingerprintProblem" | "fileBaselines">;
 
 async function initialWorkspaceBaseline(root: string): Promise<WorkspaceBaseline> {
   // A root that cannot be listed is not a usable read workspace. Keep this
@@ -593,7 +667,7 @@ async function initialWorkspaceBaseline(root: string): Promise<WorkspaceBaseline
   try {
     const mutationFingerprint = await workspaceMutationFingerprint(root, controller.signal);
     controller.signal.throwIfAborted();
-    return { mutationFingerprint, mutationFingerprintProblem: undefined };
+    return { mutationFingerprint, mutationFingerprintProblem: undefined, fileBaselines: undefined };
   } catch (error) {
     const problem = controller.signal.aborted && isErrnoException(error) && error.code === "ABORT_ERR"
       ? controller.signal.reason
@@ -602,6 +676,7 @@ async function initialWorkspaceBaseline(root: string): Promise<WorkspaceBaseline
     return {
       mutationFingerprint: undefined,
       mutationFingerprintProblem: problem.message,
+      fileBaselines: new Map(),
     };
   } finally {
     clearTimeout(deadline);
@@ -610,7 +685,7 @@ async function initialWorkspaceBaseline(root: string): Promise<WorkspaceBaseline
 
 export function workspaceBaselineInstruction(workspace: Workspace): string | undefined {
   if (!workspace.mutationFingerprintProblem) return undefined;
-  return `WORKSPACE_BASELINE_UNAVAILABLE: ${workspace.mutationFingerprintProblem} This directory is open for read, ls, glob, and grep. Edit, write, bash, and other mutations require a complete baseline; open the exact smaller existing project directory to use them. Reopen this directory after the underlying scan issue is resolved to restore its mutation baseline.`;
+  return `WORKSPACE_FILE_SCOPED_CHECKS: ${workspace.mutationFingerprintProblem} Read, edit, write, and shell commands remain available. Existing files are checked against their last successful read before replacement; new files need no prior read. Reread only an affected file if it changes externally. Commands retain workspace serialization and check previously read files, without recursively scanning unrelated files. Full-tree review snapshots are unavailable for this directory.`;
 }
 
 async function workspaceMutationFingerprint(root: string, signal?: AbortSignal): Promise<string> {

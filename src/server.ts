@@ -18,7 +18,7 @@ import {
 import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
-import { applyPatch } from "./apply-patch.js";
+import { applyPatch, parsePatch } from "./apply-patch.js";
 import {
   isArtifactDownloadSupportedPlatform,
   registerArtifactTools,
@@ -1201,6 +1201,7 @@ export function createMcpServer(
       const startedAt = performance.now();
       const workspace = workspaces.getWorkspace(workspaceId);
       const readPath = workspaces.resolveReadPath(workspace, input.path);
+      const readBaseline = await workspaces.captureReadBaseline(workspace, readPath);
       const response = await readFileTool(
         { ...input, path: readPath.absolutePath },
         {
@@ -1218,7 +1219,7 @@ export function createMcpServer(
         }, response.content, startedAt);
         return response;
       }
-      workspaces.markReadPathLoaded(workspace, readPath);
+      await workspaces.markReadPathLoaded(workspace, readPath, readBaseline);
 
       const summary = {
         ...textSummary(response.content),
@@ -1281,6 +1282,7 @@ export function createMcpServer(
           cwd: workspace.root,
           root: workspace.root,
         }),
+        [input.path],
       );
 
       if (response.isError) {
@@ -1370,6 +1372,7 @@ export function createMcpServer(
           cwd: workspace.root,
           root: workspace.root,
         }),
+        [input.path],
       );
 
       if (response.isError) {
@@ -1454,8 +1457,12 @@ export function createMcpServer(
       async ({ workspaceId, patch }) => {
         const startedAt = performance.now();
         const workspace = workspaces.getWorkspace(workspaceId);
+        const mutationPaths = parsePatch(patch).flatMap((action) =>
+          action.kind === "update" && action.moveTo ? [action.path, action.moveTo] : [action.path],
+        );
         const applied = await workspaces.runMutation(workspace, "apply_patch", () =>
           applyPatch(workspace.root, patch),
+          mutationPaths,
         );
         const paths = applied.files.map((file) => file.path).join(", ");
         const result = `Applied patch to ${applied.files.length} file(s): ${paths}`;

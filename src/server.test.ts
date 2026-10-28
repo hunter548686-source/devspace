@@ -81,7 +81,7 @@ test("open_project resolves a registered project to the same physical workspace"
   assert.equal(structuredContent(repeated).workspaceId, structuredContent(opened).workspaceId);
 });
 
-test("degraded opens expose the baseline diagnostic on both entry points and preserve read access", async (t) => {
+test("large opens keep read, write, edit and shell available on both entry points", async (t) => {
   const context = await fixture(t, { git: true, widgets: "changes" });
   const originalOpen = WorkspaceRegistry.prototype.openWorkspace;
   t.mock.method(WorkspaceRegistry.prototype, "openWorkspace", async function (
@@ -102,9 +102,9 @@ test("degraded opens expose the baseline diagnostic on both entry points and pre
     const repeated = await open();
     for (const result of [first, repeated]) {
       assert.equal(result.isError, undefined);
-      assert.match(responseText(result), /WORKSPACE_BASELINE_UNAVAILABLE/);
-      assert.match(String(structuredContent(result).instruction), /WORKSPACE_BASELINE_UNAVAILABLE/);
-      assert.match(String(responseCard(result).instruction), /WORKSPACE_BASELINE_UNAVAILABLE/);
+      assert.match(responseText(result), /WORKSPACE_FILE_SCOPED_CHECKS/);
+      assert.match(String(structuredContent(result).instruction), /WORKSPACE_FILE_SCOPED_CHECKS/);
+      assert.match(String(responseCard(result).instruction), /WORKSPACE_FILE_SCOPED_CHECKS/);
     }
     const workspaceId = structuredContent(first).workspaceId;
     const readable = await context.client.callTool({
@@ -113,18 +113,74 @@ test("degraded opens expose the baseline diagnostic on both entry points and pre
     });
     assert.equal(readable.isError, undefined);
     assert.match(responseText(readable), /project instructions/);
-    const blocked = await context.client.callTool({
+    const command = await context.client.callTool({
       name: "bash",
-      arguments: { workspaceId, command: "echo mutation-must-not-run" },
+      arguments: { workspaceId, command: "echo command-ran" },
     });
-    assert.equal(blocked.isError, true);
-    assert.match(responseText(blocked), /WORKSPACE_BASELINE_UNAVAILABLE/);
+    assert.equal(command.isError, undefined);
+    assert.match(responseText(command), /command-ran/);
+    const created = await context.client.callTool({
+      name: "write",
+      arguments: { workspaceId, path: `probe-${entry}.txt`, content: "before\n" },
+    });
+    assert.equal(created.isError, undefined);
+    const edited = await context.client.callTool({
+      name: "edit",
+      arguments: { workspaceId, path: `probe-${entry}.txt`, edits: [{ oldText: "before", newText: "after" }] },
+    });
+    assert.equal(edited.isError, undefined);
+    await writeFile(join(context.project, `probe-${entry}.txt`), "external\n");
+    const conflict = await context.client.callTool({
+      name: "write",
+      arguments: { workspaceId, path: `probe-${entry}.txt`, content: "must-not-overwrite\n" },
+    });
+    assert.equal(conflict.isError, true);
+    assert.match(responseText(conflict), /WORKSPACE_CHANGED_EXTERNALLY/);
+    await context.client.callTool({ name: "read", arguments: { workspaceId, path: `probe-${entry}.txt` } });
+    const retried = await context.client.callTool({
+      name: "edit",
+      arguments: { workspaceId, path: `probe-${entry}.txt`, edits: [{ oldText: "external", newText: "resolved" }] },
+    });
+    assert.equal(retried.isError, undefined);
+    assert.equal(await readFile(join(context.project, `probe-${entry}.txt`), "utf8"), "resolved\n");
   }
 
   const refs = await execFileAsync("git", [
     "for-each-ref", "--format=%(refname)", "refs/devspace/review",
   ], { cwd: context.project });
   assert.equal(refs.stdout, "", "degraded opening must not start a full review snapshot");
+});
+
+test("file-scoped Codex patches protect existing add and move destinations", async (t) => {
+  const context = await fixture(t, { toolMode: "codex" });
+  const originalOpen = WorkspaceRegistry.prototype.openWorkspace;
+  t.mock.method(WorkspaceRegistry.prototype, "openWorkspace", async function (
+    this: WorkspaceRegistry, ...args: Parameters<WorkspaceRegistry["openWorkspace"]>
+  ) {
+    const opened = await Reflect.apply(originalOpen, this, args);
+    opened.workspace.mutationFingerprint = undefined;
+    opened.workspace.mutationFingerprintProblem = "scan deadline";
+    return opened;
+  });
+  const opened = await callOpen(context.client, context.project, "scoped-patches");
+  const workspaceId = structuredContent(opened).workspaceId as string;
+  const apply = (patch: string) => context.client.callTool({ name: "apply_patch", arguments: { workspaceId, patch } });
+  const added = await apply("*** Begin Patch\n*** Add File: scoped.txt\n+original\n*** End Patch");
+  assert.equal(added.isError, undefined);
+  await writeFile(join(context.project, "destination.txt"), "keep\n");
+  const movePatch = "*** Begin Patch\n*** Update File: scoped.txt\n*** Move to: destination.txt\n@@\n-original\n+moved\n*** End Patch";
+  const unreadMove = await apply(movePatch);
+  assert.equal(unreadMove.isError, true);
+  assert.match(responseText(unreadMove), /WORKSPACE_FILE_READ_REQUIRED/);
+  assert.equal(await readFile(join(context.project, "destination.txt"), "utf8"), "keep\n");
+  const unreadAdd = await apply("*** Begin Patch\n*** Add File: destination.txt\n+overwrite\n*** End Patch");
+  assert.equal(unreadAdd.isError, true);
+  await context.client.callTool({ name: "read", arguments: { workspaceId, path: "destination.txt" } });
+  const moved = await apply(movePatch);
+  assert.equal(moved.isError, undefined);
+  assert.equal(await readFile(join(context.project, "destination.txt"), "utf8"), "moved\n");
+  const deleted = await apply("*** Begin Patch\n*** Delete File: destination.txt\n*** End Patch");
+  assert.equal(deleted.isError, undefined);
 });
 
 test("open_project fails closed for an unknown registered project", async (t) => {

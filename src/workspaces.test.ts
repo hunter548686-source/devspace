@@ -187,7 +187,7 @@ test("a symlinked allowed root preserves checkout behavior and still rejects wor
   );
 });
 
-test("a descendant Darwin scandir deadlock leaves a readable workspace and clears a reused mutation baseline", { skip: platform() !== "darwin" }, async (t) => {
+test("a descendant Darwin scandir deadlock keeps commands available with file-scoped checks", { skip: platform() !== "darwin" }, async (t) => {
   const context = await fixture(t);
   await mkdir(join(context.root, "Unavailable.app"));
   const bundlePath = await realpath(join(context.root, "Unavailable.app"));
@@ -214,11 +214,8 @@ test("a descendant Darwin scandir deadlock leaves a readable workspace and clear
     const readablePath = registry.resolveReadPath(reopened.workspace, "nested/file.txt");
     assert.equal(await readFile(readablePath.absolutePath, "utf8"), "hello\n");
     let actionRan = false;
-    await assert.rejects(
-      () => registry.runMutation(reopened.workspace, "test mutation", async () => { actionRan = true; }),
-      /WORKSPACE_BASELINE_UNAVAILABLE/,
-    );
-    assert.equal(actionRan, false);
+    await registry.runMutation(reopened.workspace, "test mutation", async () => { actionRan = true; });
+    assert.equal(actionRan, true);
 
     unavailable = false;
     const recovered = await registry.openWorkspace(context.root, options);
@@ -310,10 +307,7 @@ test("a slow initial scan stops traversal without publishing a partial baseline"
   assert.equal(opened.workspace.mutationFingerprint, undefined);
   assert.match(opened.workspace.mutationFingerprintProblem ?? "", /time budget/);
   assert.equal(laterVisited, false);
-  await assert.rejects(
-    () => context.registry.runMutation(opened.workspace, "test mutation", async () => {}),
-    /WORKSPACE_BASELINE_UNAVAILABLE/,
-  );
+  await context.registry.runMutation(opened.workspace, "test mutation", async () => {});
 });
 
 test("the initial scan deadline aborts active file streams", async (t) => {
@@ -340,6 +334,57 @@ test("the initial scan deadline aborts active file streams", async (t) => {
   assert.equal(opened.workspace.mutationFingerprint, undefined);
   assert.match(opened.workspace.mutationFingerprintProblem ?? "", /time budget/);
   assert.equal(pendingStream?.destroyed, true);
+});
+
+test("file-scoped checks isolate conflicts and keep unread files and symlink targets protected", async (t) => {
+  const context = await fixture(t);
+  const { workspace } = await context.registry.openWorkspace(context.root);
+  workspace.mutationFingerprint = undefined;
+  workspace.mutationFingerprintProblem = "scan deadline";
+  workspace.fileBaselines = new Map();
+  const path = "nested/file.txt";
+  await assert.rejects(
+    () => context.registry.runMutation(workspace, "write", async () => {}, [path]),
+    /WORKSPACE_FILE_READ_REQUIRED/,
+  );
+  const readPath = context.registry.resolveReadPath(workspace, path);
+  const before = await context.registry.captureReadBaseline(workspace, readPath);
+  await context.registry.markReadPathLoaded(workspace, readPath, before);
+  await writeFile(join(context.root, "unrelated.txt"), "external unrelated\n");
+  await context.registry.runMutation(workspace, "edit", async () => {
+    await writeFile(readPath.absolutePath, "edited\n");
+  }, [path]);
+  const session = await context.registry.beginLongRunningMutation(workspace, "shell");
+  await assert.rejects(
+    () => context.registry.runMutation(workspace, "write", async () => {}, ["new.txt"]),
+    /WORKSPACE_MUTATION_IN_PROGRESS/,
+  );
+  await session.complete();
+  const stale = await context.registry.captureReadBaseline(workspace, readPath);
+  await writeFile(readPath.absolutePath, "changed during read\n");
+  await assert.rejects(
+    () => context.registry.markReadPathLoaded(workspace, readPath, stale),
+    /WORKSPACE_CHANGED_EXTERNALLY/,
+  );
+  const fresh = await context.registry.captureReadBaseline(workspace, readPath);
+  await context.registry.markReadPathLoaded(workspace, readPath, fresh);
+  if (platform() !== "win32") {
+    const alias = join(context.root, "alias.txt");
+    await symlink(readPath.absolutePath, alias);
+    const aliasRead = context.registry.resolveReadPath(workspace, "alias.txt");
+    const aliasState = await context.registry.captureReadBaseline(workspace, aliasRead);
+    await context.registry.markReadPathLoaded(workspace, aliasRead, aliasState);
+    await writeFile(readPath.absolutePath, "target changed\n");
+    await assert.rejects(
+      () => context.registry.runMutation(workspace, "edit", async () => {}, ["alias.txt"]),
+      /WORKSPACE_CHANGED_EXTERNALLY/,
+    );
+    await symlink(context.outsideRoot, join(context.root, "outside"), "dir");
+    await assert.rejects(
+      () => context.registry.runMutation(workspace, "write", async () => {}, ["outside/new.txt"]),
+      /outside workspace root/,
+    );
+  }
 });
 
 test("local application bundle contents remain covered by the mutation guard", async (t) => {
