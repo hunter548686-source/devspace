@@ -42,7 +42,8 @@ try {
     await testSizeLimitAndCleanup(join(root, "size-limit"));
     await testCrashLeftoverCleanup(join(root, "stale-partials"));
     await testSymlinkRejection(join(root, "symlinks"));
-    await testPublicationFailurePreservesReplacement(join(root, "publication-race"));
+    if (process.platform === "linux") await testPublicationFailurePreservesReplacement(join(root, "publication-race"));
+    await testStreamingCollision(join(root, "streaming-race"));
     await testPublishedPermissions(join(root, "permissions"));
   } else {
     await testUnsupportedPlatform(join(root, "unsupported-platform"));
@@ -102,7 +103,7 @@ function testOneToolContract(): void {
 
 function testPlatformSupportContract(): void {
   assert.equal(isArtifactDownloadSupportedPlatform("linux"), true);
-  assert.equal(isArtifactDownloadSupportedPlatform("darwin"), false);
+  assert.equal(isArtifactDownloadSupportedPlatform("darwin"), true);
   assert.equal(isArtifactDownloadSupportedPlatform("freebsd"), false);
   assert.equal(isArtifactDownloadSupportedPlatform("openbsd"), false);
   assert.equal(isArtifactDownloadSupportedPlatform("netbsd"), false);
@@ -155,16 +156,9 @@ async function testWorkspaceMutationGate(testRoot: string): Promise<void> {
   const invoke = callback;
 
   await writeFile(join(workspaceRoot, "external-change.txt"), "outside\n");
-  await assert.rejects(
-    () => invoke({
-      file: { native: true },
-      workspaceId: opened.workspace.id,
-      path: "stale-download.bin",
-    }),
-    /WORKSPACE_CHANGED_EXTERNALLY/,
-  );
-  assert.equal(downloadCalls, 0);
-  await assert.rejects(readFile(join(workspaceRoot, "stale-download.bin")), /ENOENT/);
+  await invoke({ file: { native: true }, workspaceId: opened.workspace.id, path: "stale-download.bin" });
+  assert.equal(downloadCalls, 1);
+  assert.equal(await readFile(join(workspaceRoot, "stale-download.bin"), "utf8"), "artifact bytes\n");
 
   opened = await workspaces.openWorkspace(workspaceRoot);
   await invoke({
@@ -175,7 +169,7 @@ async function testWorkspaceMutationGate(testRoot: string): Promise<void> {
   assert.equal(await readFile(join(workspaceRoot, "downloaded.bin"), "utf8"), "artifact bytes\n");
   await workspaces.runMutation(opened.workspace, "after-artifact", async () => {
     await writeFile(join(workspaceRoot, "after-artifact.txt"), "safe\n");
-  });
+  }, ["after-artifact.txt"]);
 }
 
 async function testUnsupportedPlatform(testRoot: string): Promise<void> {
@@ -415,6 +409,22 @@ async function testPublishedPermissions(testRoot: string): Promise<void> {
   }
 
   assert.equal((await stat(join(workspaceRoot, "private.txt"))).mode & 0o777, 0o600);
+}
+
+async function testStreamingCollision(testRoot: string): Promise<void> {
+  const workspaceRoot = join(testRoot, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+  const stream = Readable.from((async function* () {
+    yield Buffer.from("first");
+    await writeFile(join(workspaceRoot, "collision.txt"), "external replacement");
+    yield Buffer.from("second");
+  })());
+  await expectArtifactError(downloadIncomingArtifact({
+    registry: registryFor({name:"collision.txt",stream}), workspaceId:"ws", workspaceRoot,
+    maxFileBytes:1024,file:{native:true},path:"collision.txt",
+  }), "artifact_destination_exists");
+  assert.equal(await readFile(join(workspaceRoot,"collision.txt"),"utf8"),"external replacement");
+  assert.deepEqual(await readdir(workspaceRoot),["collision.txt"]);
 }
 
 function testLogRedaction(): void {

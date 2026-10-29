@@ -6,7 +6,7 @@ import { isPathInsideRoot, resolveAllowedPath } from "./roots.js";
 
 const MAX_CAPTURED_OUTPUT = 64 * 1024;
 const MIN_TIMEOUT_SECONDS = 30;
-const MAX_TIMEOUT_SECONDS = 900;
+const MAX_TIMEOUT_SECONDS = 2147483;
 const DEFAULT_TIMEOUT_SECONDS = 300;
 
 export interface SetupExternalRepositoryInput {
@@ -314,26 +314,30 @@ export function npmInstallPlan(
   return { command: "npm", args };
 }
 
-async function detectNpmInstallPlan(
+export async function detectPackageInstallPlan(
   projectPath: string,
   allowInstallScripts: boolean,
 ): Promise<PackageInstallPlan> {
   const packageJsonPath = join(projectPath, "package.json");
   if (!(await pathExists(packageJsonPath))) {
-    throw new Error("Dependency installation was requested, but package.json is missing.");
+    if (await pathExists(join(projectPath, "uv.lock"))) return { command: "uv", args: ["sync", "--frozen", ...(allowInstallScripts ? [] : ["--no-build", "--no-install-project"])] };
+    throw new Error("Dependency installation requires package.json with a lockfile, or a Python uv.lock.");
   }
 
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
     packageManager?: unknown;
   };
-  if (
-    typeof packageJson.packageManager === "string" &&
-    !packageJson.packageManager.startsWith("npm@")
-  ) {
-    throw new Error(
-      `Only npm projects are supported by this controlled installer; found packageManager=${packageJson.packageManager}.`,
-    );
+  const manager = typeof packageJson.packageManager === "string" ? packageJson.packageManager : "";
+  if (manager.startsWith("pnpm@") || (!manager && await pathExists(join(projectPath,"pnpm-lock.yaml")))) {
+    if (!await pathExists(join(projectPath,"pnpm-lock.yaml"))) throw new Error("pnpm install requires pnpm-lock.yaml.");
+    return { command:"pnpm",args:["install","--frozen-lockfile",...(allowInstallScripts?[]:["--ignore-scripts"])] };
   }
+  if (manager.startsWith("yarn@") || (!manager && await pathExists(join(projectPath,"yarn.lock")))) {
+    if (!await pathExists(join(projectPath,"yarn.lock"))) throw new Error("yarn install requires yarn.lock.");
+    const modern = /^yarn@[2-9][0-9]*\./.test(manager) || await pathExists(join(projectPath,".yarnrc.yml"));
+    return { command:"yarn",args:modern?["install","--immutable",...(allowInstallScripts?[]:["--mode=skip-builds"])]:["install","--frozen-lockfile",...(allowInstallScripts?[]:["--ignore-scripts"])] };
+  }
+  if (manager && !manager.startsWith("npm@")) throw new Error("Unsupported packageManager: "+manager);
 
   return npmInstallPlan(
     await pathExists(join(projectPath, "package-lock.json")),
@@ -462,8 +466,8 @@ export async function setupExternalRepository(
   const gitEnv = {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
+    // Reuse the owner-configured credential helper for authorized private repositories.
+    // Credentials never appear in repository URLs or tool results.
     GIT_ASKPASS: "/usr/bin/false",
     SSH_ASKPASS: "/usr/bin/false",
     GCM_INTERACTIVE: "Never",
@@ -474,9 +478,9 @@ export async function setupExternalRepository(
     "-c",
     "protocol.file.allow=never",
     "-c",
-    "credential.helper=",
-    "-c",
     "core.askPass=",
+    "-c",
+    "protocol.ext.allow=never",
   ];
 
   let claimedDestination: ClaimedDestination | undefined;
@@ -534,7 +538,7 @@ export async function setupExternalRepository(
 
     let installCommand: string | undefined;
     if (installDependencies) {
-      const plan = await detectNpmInstallPlan(destination, allowInstallScripts);
+      const plan = await detectPackageInstallPlan(destination, allowInstallScripts);
       await executeCommand(plan.command, plan.args, {
         cwd: destination,
         timeoutMs,

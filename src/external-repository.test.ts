@@ -8,6 +8,7 @@ import {
   assertNoEscapingSymlinks,
   normalizeGitHubRepositoryUrl,
   npmInstallPlan,
+  detectPackageInstallPlan,
   setupExternalRepository,
   validateExpectedCommit,
   validateGitRef,
@@ -65,6 +66,13 @@ async function main(): Promise<void> {
 
   try {
     await mkdir(join(repositoryRoot, "inside"), { recursive: true });
+    const installFixture=join(repositoryRoot,"inside");
+    await writeFile(join(installFixture,"package.json"),JSON.stringify({packageManager:"pnpm@10.0.0"}));
+    await writeFile(join(installFixture,"pnpm-lock.yaml"),"lockfileVersion: 9");
+    assert.deepEqual(await detectPackageInstallPlan(installFixture,false),{command:"pnpm",args:["install","--frozen-lockfile","--ignore-scripts"]});
+    await writeFile(join(installFixture,"package.json"),JSON.stringify({packageManager:"yarn@4.0.0"}));
+    await writeFile(join(installFixture,"yarn.lock"),"");
+    assert.deepEqual(await detectPackageInstallPlan(installFixture,true),{command:"yarn",args:["install","--immutable"]});
     await writeFile(join(repositoryRoot, "inside", "target.txt"), "safe\n", "utf8");
     await writeFile(outsideFile, "outside\n", "utf8");
     await symlink("inside/target.txt", join(repositoryRoot, "internal-link"));

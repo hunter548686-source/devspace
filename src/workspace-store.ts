@@ -54,6 +54,8 @@ export interface WorkspaceStore {
   }): WorkspaceConversationBinding;
   touchConversationBinding(conversationScopeId: string, targetKey: string): void;
   deleteConversationBinding(conversationScopeId: string, targetKey: string): void;
+  loadFileBaselines?(workspaceId: string): Array<[string, string]>;
+  saveFileBaseline?(workspaceId: string, path: string, state: string | undefined): void;
   close?(): void;
 }
 
@@ -62,6 +64,14 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
 
   constructor(stateDir: string) {
     this.database = openDatabase(stateDir);
+    this.database.sqlite.exec(`
+      create table if not exists workspace_file_baselines (
+        workspace_id text not null references workspace_sessions(id) on delete cascade,
+        path text not null,
+        state text not null,
+        primary key (workspace_id, path)
+      );
+    `);
   }
 
   createSession(input: {
@@ -210,6 +220,26 @@ export class SqliteWorkspaceStore implements WorkspaceStore {
         ),
       )
       .run();
+  }
+
+  loadFileBaselines(workspaceId: string): Array<[string, string]> {
+    const rows = this.database.sqlite.prepare(
+      "select path, state from workspace_file_baselines where workspace_id = ?",
+    ).all(workspaceId) as Array<{ path: string; state: string }>;
+    return rows.map(({ path, state }) => [path, state]);
+  }
+
+  saveFileBaseline(workspaceId: string, path: string, state: string | undefined): void {
+    if (state === undefined) {
+      this.database.sqlite.prepare(
+        "delete from workspace_file_baselines where workspace_id = ? and path = ?",
+      ).run(workspaceId, path);
+      return;
+    }
+    this.database.sqlite.prepare(
+      "insert into workspace_file_baselines (workspace_id, path, state) values (?, ?, ?) " +
+      "on conflict(workspace_id, path) do update set state = excluded.state",
+    ).run(workspaceId, path, state);
   }
 
   close(): void {

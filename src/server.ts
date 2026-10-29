@@ -19,6 +19,10 @@ import express from "express";
 import type { Request, Response } from "express";
 import * as z from "zod/v4";
 import { applyPatch, parsePatch } from "./apply-patch.js";
+import { registerInspectionTools } from "./inspection-pages.js";
+import { registerFileOperationTools } from "./file-operations.js";
+import { registerExportTool, registerExportRoute } from "./artifact-exports.js";
+import { registerDurableTaskTools } from "./durable-tasks.js";
 import {
   isArtifactDownloadSupportedPlatform,
   registerArtifactTools,
@@ -196,7 +200,7 @@ function serverInstructions(config: ServerConfig): string {
     ? ` When the user or ChatGPT Project identifies a registered project, prefer ${toolNames.openProject} with its stable project ID or exact name so DevSpace resolves the canonical or task workspace from the portfolio registry. Use ${toolNames.openWorkspace} only for an explicit path or compatibility recovery.`
     : "";
   const externalRepositoryInstruction = config.externalRepositoryEnabled
-    ? ` Use ${toolNames.setupExternalRepository} for controlled cloning of a reviewed public GitHub repository.`
+    ? ` Use ${toolNames.setupExternalRepository} for cloning an authorized GitHub repository using existing configured credentials when needed.`
     : "";
   const showChangesInstruction =
     config.widgets === "changes"
@@ -1424,7 +1428,7 @@ export function createMcpServer(
   );
   }
 
-  if (config.toolMode === "codex") {
+  if (config.toolMode === "codex" || config.toolMode === "full") {
     registerAppTool(
       server,
       "apply_patch",
@@ -1779,7 +1783,7 @@ export function createMcpServer(
     {
       title: "Set up external repository",
       description:
-        "Clone one public HTTPS GitHub repository into a new destination inside an open workspace, optionally check out an exact commit and run a reproducible npm ci install. The destination parent must already exist and the destination itself must not exist. Git hooks, file-protocol access, interactive credential prompts, npm audit/funding calls, and npm install scripts are disabled by default. On failure, the incomplete destination is removed. Use this instead of shell-based git clone or npm install. Call open_workspace first and pass workspaceId.",
+        "Clone one authorized HTTPS GitHub repository into a new destination inside an open workspace using the existing credential helper for private repositories, optionally check out an exact commit and install from npm, pnpm, Yarn or uv lockfiles. The destination parent must already exist and the destination itself must not exist. Git hooks, file-protocol access, interactive credential prompts, npm audit/funding calls, and npm install scripts are disabled by default. On failure, the incomplete destination is removed. Use this instead of shell-based git clone or npm install. Call open_workspace first and pass workspaceId.",
       inputSchema: {
         workspaceId: z
           .string()
@@ -1787,7 +1791,7 @@ export function createMcpServer(
         repositoryUrl: z
           .string()
           .describe(
-            "Public HTTPS GitHub repository URL in owner/repository form. Credentials, query strings, fragments, and non-GitHub hosts are rejected.",
+            "HTTPS GitHub repository URL in owner/repository form; public or private using existing configured credentials. Credentials, query strings, fragments, and non-GitHub hosts are rejected.",
           ),
         destination: z
           .string()
@@ -1821,10 +1825,10 @@ export function createMcpServer(
         timeoutSeconds: z
           .number()
           .positive()
-          .max(900)
+          .max(2147483)
           .optional()
           .describe(
-            "Timeout applied to each clone, checkout, verification, and installation command. Clamped to 30-900 seconds; default 300.",
+            "Timeout applied to each clone, checkout, verification, and installation command. Choose the budget needed for this repository; default 300 seconds. Large installations can also use start_task with the native package manager.",
           ),
       },
       outputSchema: resultOutputSchema({
@@ -1865,6 +1869,7 @@ export function createMcpServer(
               ),
             },
           ),
+          [input.destination],
         );
         const resultText = [
           `Cloned ${result.repositoryUrl}`,
@@ -1950,9 +1955,9 @@ export function createMcpServer(
         timeout: z
           .number()
           .positive()
-          .max(300)
+          .max(2147483)
           .optional()
-          .describe("Timeout in seconds. Defaults to 30, max 300."),
+          .describe("Foreground timeout in seconds; defaults to 30. Use start_task for background execution and reconnectable logs."),
       },
       outputSchema: resultOutputSchema(),
       ...toolWidgetDescriptorMeta(config, "shell"),
@@ -1970,6 +1975,7 @@ export function createMcpServer(
           cwd,
           root: workspace.root,
         }),
+        [],
       );
 
       if (response.isError) {
@@ -2017,9 +2023,14 @@ export function createMcpServer(
   );
   }
 
-  if (config.toolMode === "codex") {
+  if (config.toolMode === "codex" || config.toolMode === "full") {
     registerCodexProcessTools(server, config, workspaces, processSessions);
   }
+
+  registerFileOperationTools(server, workspaces);
+  registerExportTool(server, workspaces, config.stateDir, config.publicBaseUrl);
+  registerInspectionTools(server, workspaces, config.stateDir);
+  registerDurableTaskTools(server, workspaces, config.stateDir);
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
     registerArtifactTools(server, {
@@ -2146,6 +2157,8 @@ export function createServer(
       setHeaders: setAssetHeaders,
     }),
   );
+
+  registerExportRoute(app, config.stateDir);
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, name: "devspace" });

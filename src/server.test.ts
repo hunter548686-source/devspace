@@ -227,7 +227,7 @@ test("the controlled external repository tool fails closed without portfolio aut
   assert.match(responseText(result), /SOURCE_AUTHORITY_REGISTRY_REQUIRED/);
 });
 
-test("codex exec_command rejects a workspace changed after open", async (t) => {
+test("codex exec_command permits unrelated workspace changes", async (t) => {
   const context = await fixture(t, { toolMode: "codex" });
   const opened = await callOpen(context.client, context.project, "chat-stale-exec");
   const workspaceId = structuredContent(opened).workspaceId as string;
@@ -236,11 +236,11 @@ test("codex exec_command rejects a workspace changed after open", async (t) => {
   const result = await callExecCommand(
     context.client,
     workspaceId,
-    nodeCommand("console.log('must not run')"),
+    nodeCommand("console.log('authorized command ran')"),
   );
 
-  assert.equal(result.isError, true);
-  assert.match(responseText(result), /WORKSPACE_CHANGED_EXTERNALLY/);
+  assert.equal(result.isError, undefined);
+  assert.match(responseText(result), /authorized command ran/);
 });
 
 test("a running codex process excludes concurrent workspace mutations", async (t) => {
@@ -427,6 +427,30 @@ test("checkout reuse and context suppression survive a registry restart", async 
   } finally {
     await closeRestored();
   }
+});
+
+test("normal workspace changes are isolated and target versions survive restart", async t => {
+  const context=await fixture(t);
+  const opened=await callOpen(context.client,context.project,"persisted-files");
+  const workspaceId=structuredContent(opened).workspaceId as string;
+  const call=(client:Client,name:string,args:Record<string,unknown>)=>client.callTool({name,arguments:{workspaceId,...args}});
+  await call(context.client,"read",{path:"AGENTS.md"});
+  await writeFile(join(context.project,"unrelated.txt"),"external");
+  const changed=await call(context.client,"edit",{path:"AGENTS.md",edits:[{oldText:"project instructions",newText:"updated instructions"}]});
+  assert.equal(changed.isError,undefined);
+  await context.close();
+  const store=new SqliteWorkspaceStore(context.stateDir);
+  const server=createMcpServer(context.config,new WorkspaceRegistry(context.config,store),createReviewCheckpointManager(),new ProcessSessionManager(),[]);
+  const client=new Client({name:"file-recovery",version:"1"});
+  const [a,b]=InMemoryTransport.createLinkedPair();await Promise.all([client.connect(a),server.connect(b)]);
+  t.after(async()=>{await client.close();await server.close();store.close();});
+  await writeFile(join(context.project,"AGENTS.md"),"external update\n");
+  const conflict=await call(client,"write",{path:"AGENTS.md",content:"must not overwrite"});
+  assert.equal(conflict.isError,true);
+  assert.equal(await readFile(join(context.project,"AGENTS.md"),"utf8"),"external update\n");
+  await call(client,"read",{path:"AGENTS.md"});
+  const recovered=await call(client,"edit",{path:"AGENTS.md",edits:[{oldText:"external update",newText:"reviewed update"}]});
+  assert.equal(recovered.isError,undefined);
 });
 
 interface ServerFixture {

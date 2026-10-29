@@ -93,6 +93,11 @@ export interface WorkspaceMutationSession {
 
 export class WorkspaceRegistry {
   private readonly workspaces = new Map<string, Workspace>();
+  private externalMutationGuard?: (workspace: Workspace) => Promise<void>;
+
+  setExternalMutationGuard(guard: (workspace: Workspace) => Promise<void>): void {
+    this.externalMutationGuard = guard;
+  }
   private readonly pendingCheckoutOpens = new Map<string, Promise<WorkspaceContext>>();
   private readonly mutationQueues = new Map<string, Promise<void>>();
   private readonly exclusiveMutationReservations = new Map<
@@ -266,7 +271,11 @@ export class WorkspaceRegistry {
       await session.fail();
       throw error;
     }
-    await session.complete();
+    if (result && typeof result === "object" && "isError" in result && result.isError === true) {
+      await session.fail();
+    } else {
+      await session.complete();
+    }
     return result;
   }
 
@@ -274,7 +283,7 @@ export class WorkspaceRegistry {
     workspace: Workspace,
     operation: string,
   ): Promise<WorkspaceMutationSession> {
-    return this.acquireMutationSession(workspace, operation, true);
+    return this.acquireMutationSession(workspace, operation, true, []);
   }
 
   private async acquireMutationSession(
@@ -323,7 +332,8 @@ export class WorkspaceRegistry {
     await previous.catch(() => undefined);
     let currentFingerprint: string;
     try {
-      if (workspace.mutationFingerprintProblem) {
+      await this.externalMutationGuard?.(workspace);
+      if (paths !== undefined || workspace.mutationFingerprintProblem) {
         return await this.scopedMutationSession(workspace, operation, paths, releaseSession);
       }
       if (!workspace.mutationFingerprint) {
@@ -384,7 +394,7 @@ export class WorkspaceRegistry {
   }
 
   async captureReadBaseline(workspace: Workspace, readPath: WorkspaceReadPath): Promise<string | undefined> {
-    if (!workspace.mutationFingerprintProblem || readPath.skillRead) return undefined;
+    if (readPath.skillRead) return undefined;
     return this.scopedPathState(workspace, readPath.absolutePath);
   }
 
@@ -416,11 +426,19 @@ export class WorkspaceRegistry {
         try {
           for (const [path, original] of before) {
             const current = await this.scopedPathState(workspace, path);
-            if (completed || current === original) baselines.set(path, current);
-            else baselines.delete(path);
+            if (completed || current === original) {
+              baselines.set(path, current);
+              this.store?.saveFileBaseline?.(workspace.id, path, current);
+            } else {
+              baselines.delete(path);
+              this.store?.saveFileBaseline?.(workspace.id, path, undefined);
+            }
           }
         } catch (error) {
-          for (const path of before.keys()) baselines.delete(path);
+          for (const path of before.keys()) {
+            baselines.delete(path);
+            this.store?.saveFileBaseline?.(workspace.id, path, undefined);
+          }
           if (completed) throw error;
         } finally {
           release();
@@ -460,6 +478,8 @@ export class WorkspaceRegistry {
       ...this.loadSkillsForWorkspace(root),
       activatedSkillDirs: new Set(),
       mutationFingerprint: undefined,
+      mutationFingerprintProblem: "WORKSPACE_FILE_SCOPED_CHECKS: Restored session checks persisted target-file versions.",
+      fileBaselines: new Map(this.store?.loadFileBaselines?.(session.id) ?? []),
     };
     this.store?.touchSession(workspaceId);
     this.workspaces.set(restoredWorkspace.id, restoredWorkspace);
@@ -505,6 +525,7 @@ export class WorkspaceRegistry {
         throw new Error("WORKSPACE_CHANGED_EXTERNALLY: The file changed during read. Read it again before editing.");
       }
       (workspace.fileBaselines ??= new Map()).set(readPath.absolutePath, after);
+      this.store?.saveFileBaseline?.(workspace.id, readPath.absolutePath, after);
     }
     if (readPath.skillRead?.isSkillFile) {
       markSkillActivated(workspace.activatedSkillDirs, readPath.skillRead.skill);

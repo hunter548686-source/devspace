@@ -14,6 +14,7 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { ArtifactError } from "./artifact-error.js";
+import { downloadDarwin } from "./artifact-darwin.js";
 import type { ServerConfig } from "./config.js";
 import {
   describeIncomingArtifactValue,
@@ -35,7 +36,7 @@ const PARTIAL_PREFIX = ".devspace-download-";
 const PARTIAL_SUFFIX = ".partial";
 const STALE_PARTIAL_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_STALE_PARTIAL_CLEANUP = 32;
-const ARTIFACT_DOWNLOAD_PLATFORMS = new Set<NodeJS.Platform>(["linux"]);
+const ARTIFACT_DOWNLOAD_PLATFORMS = new Set<NodeJS.Platform>(["linux", "darwin"]);
 
 const openAIFileReferenceInputSchema = z.strictObject({
   download_url: z.string(),
@@ -133,7 +134,7 @@ export function registerArtifactTools(
           publicResult: { path: downloaded.path },
           logResult: downloaded,
         };
-      });
+      }, [input.path]);
     }),
   );
 }
@@ -183,6 +184,9 @@ export async function downloadIncomingArtifact({
 
   const destination = normalizeArtifactDestination(path);
   const opened = await registry.open(file);
+  if (process.platform === "darwin") {
+    return downloadDarwin(opened.stream, workspaceRoot, destination.path, maxFileBytes, opened.size);
+  }
   let workspaceHandle: FileHandle | undefined;
   let destinationDirectory: SecureDestinationDirectory | undefined;
   let partialPath: string | undefined;

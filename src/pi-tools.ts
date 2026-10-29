@@ -101,7 +101,11 @@ export async function grepFilesTool(input: GrepToolInput, context: ToolContext):
   if (input.path) resolveAllowedPath(input.path, context.cwd, [context.root]);
   const tool = createGrepTool(context.cwd);
 
-  return runTool((params) => tool.execute("grep_files", params), input, context);
+  const include = (input as GrepToolInput & { include?: string }).include;
+  return runTool((params) => tool.execute("grep_files", params), {
+    ...input,
+    glob: input.glob ?? include,
+  }, context);
 }
 
 export async function findFilesTool(input: FindToolInput, context: ToolContext): Promise<ToolResponse> {
@@ -120,7 +124,7 @@ export async function listDirectoryTool(input: LsToolInput, context: ToolContext
 
 export async function runShellTool(input: BashToolInput, context: ToolContext): Promise<ToolResponse> {
   const tool = createBashTool(context.cwd);
-  const timeout = input.timeout === undefined ? 30 : Math.min(input.timeout, 300);
+  const timeout = input.timeout === undefined ? 30 : input.timeout;
 
   return runTool((params) => tool.execute("run_shell", params), {
     command: input.command,
