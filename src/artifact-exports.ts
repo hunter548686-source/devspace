@@ -70,7 +70,7 @@ export function registerExportRoute(app:Express,stateDir:string){
       const token=typeof req.query.token==="string"?req.query.token:"";
       const {record,path}=await exports.get(token);
       res.type(record.mimeType);
-      res.download(path,record.fileName,{dotfiles:"deny"},error=>{if(error&&!res.headersSent)res.status(404).end();});
+      res.download(basename(path),record.fileName,{root:join(stateDir,"exports"),dotfiles:"deny"},error=>{if(error&&!res.headersSent)res.status(404).end();});
     }catch{res.status(404).json({error:"export_not_found_or_expired"});}
   });
 }
