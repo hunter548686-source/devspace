@@ -1,0 +1,119 @@
+{
+  "status": "REPAIRED_AND_DEPLOYED",
+  "runtime": {
+    "status": "ACTIVE_ACCEPTANCE_PASS",
+    "release": "waishnav-devspace-1.0.6-d777f20b1bc306c9",
+    "activeBin": "/Users/liheng/.devspace/runtime/releases/waishnav-devspace-1.0.6-d777f20b1bc306c9/dist/cli.js",
+    "fields": [
+      "state = running",
+      "program = /Users/liheng/.devspace/bin/devspace",
+      "pid = 11931",
+      "state = active",
+      "state = active"
+    ],
+    "serviceAcceptance": {
+      "status": "PASS",
+      "before": {
+        "program": "/Users/liheng/.devspace/bin/devspace",
+        "pid": 1826
+      },
+      "after": {
+        "program": "/Users/liheng/.devspace/bin/devspace",
+        "pid": 11931,
+        "attempt": 1
+      },
+      "local": {
+        "attempt": 4,
+        "httpStatus": 200,
+        "body": {
+          "ok": true,
+          "name": "devspace"
+        }
+      },
+      "public": [
+        {
+          "attempt": 1,
+          "httpStatus": 200,
+          "body": {
+            "ok": true,
+            "name": "devspace"
+          }
+        },
+        {
+          "attempt": 1,
+          "httpStatus": 200,
+          "body": {
+            "ok": true,
+            "name": "devspace"
+          }
+        },
+        {
+          "attempt": 1,
+          "httpStatus": 200,
+          "body": {
+            "ok": true,
+            "name": "devspace"
+          }
+        }
+      ]
+    },
+    "temporaryJob": "removed"
+  },
+  "originalPaths": [
+    {
+      "path": "/Users/liheng/Documents/Codex/2026-09-30/task/upgrade-26.928.20755/candidate-home/computer-use",
+      "workspaceId": "ws_6c629cafad",
+      "roundTripMs": 638,
+      "instruction": "Use this workspaceId in all subsequent tool calls for this exact project directory. Do not call open_workspace again for the same directory unless this workspaceId stops working. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding.\n\nWORKSPACE_BASELINE_UNAVAILABLE: The descendant directory \"Codex Computer Use.app\" could not be listed (macOS EDEADLK, errno 11). This directory is open for read, ls, glob, and grep. Edit, write, bash, and other mutations require a complete baseline; open the exact smaller existing project directory to use them. Reopen this directory after the underlying scan issue is resolved to restore its mutation baseline.",
+      "error": false
+    },
+    {
+      "path": "/Users/liheng/Documents/Codex",
+      "workspaceId": "ws_04b7341e84",
+      "roundTripMs": 775,
+      "instruction": "Use this workspaceId in all subsequent tool calls for this exact project directory. Do not call open_workspace again for the same directory unless this workspaceId stops working. Follow loaded agentsFiles instructions. Before working under a path listed in availableAgentsFiles, read that instruction file. When a task matches an available skill in skills, read its path before proceeding.\n\nWORKSPACE_BASELINE_UNAVAILABLE: The descendant directory \"2026-09-30/task/upgrade-26.928.20755/candidate-home/computer-use/Codex Computer Use.app\" could not be listed (macOS EDEADLK, errno 11). This directory is open for read, ls, glob, and grep. Edit, write, bash, and other mutations require a complete baseline; open the exact smaller existing project directory to use them. Reopen this directory after the underlying scan issue is resolved to restore its mutation baseline.",
+      "error": false
+    },
+    {
+      "path": "/Users/liheng/Downloads",
+      "workspaceId": "ws_ad7cb1b26e",
+      "roundTripMs": 2682,
+      "instruction": "Workspace already open as ws_ad7cb1b26e.\n\nReuse this workspaceId for subsequent tool calls. This is the same physical directory previously opened in this conversation.\n\nContinue following the project instructions, nested instruction files, skills, and diagnostics previously provided for this workspace. They remain the active workspace context and are not repeated here.\n\nWORKSPACE_BASELINE_UNAVAILABLE: The initial workspace scan exceeded its 2000 ms time budget. This directory is open for read, ls, glob, and grep. Edit, write, bash, and other mutations require a complete baseline; open the exact smaller existing project directory to use them. Reopen this directory after the underlying scan issue is resolved to restore its mutation baseline.",
+      "error": false
+    }
+  ],
+  "readChecks": [
+    {
+      "check": "Codex ls",
+      "success": true
+    },
+    {
+      "check": "Downloads ls",
+      "success": true
+    },
+    {
+      "check": "normal project read",
+      "success": true
+    }
+  ],
+  "tests": {
+    "typecheck": "PASS",
+    "fullNpmTest": "PASS",
+    "sourceAuthority": "PASS",
+    "isolatedStage": "PASS"
+  },
+  "speed": {
+    "downloadMbps": 472.13504,
+    "uploadMbps": 44.078896,
+    "baseRttMs": 20.51405143737793,
+    "responsivenessRpm": 923.25390625,
+    "interface": "lo0",
+    "proxyState": {
+      "proxied": 354
+    },
+    "endpoint": "aupor1-edge-bx-003.aaplimg.com",
+    "elapsedSeconds": 19.867617964744568,
+    "startedAt": "2026-10-17 05:42:55 UTC"
+  },
+  "limitation": "Ancestor directories with incomplete scans support reads/listing. They do not receive a mutation baseline; edit/write/bash require opening a smaller exact existing project. The dataless app bundle itself remains unavailable."
+}

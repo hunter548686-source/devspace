@@ -1,0 +1,260 @@
+{
+  "status": "PASS",
+  "host": "mac-mini",
+  "sourceCommit": "859290170b1a84ebfafaf368119407393416bc3b",
+  "artifactSha256": "923a51d7619f565e22f95e82a28a8ff900523cb06c4d57f696156643fc257564",
+  "plan": {
+    "host": "mac-mini",
+    "stamp": "20261106T0906Z",
+    "archive": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0906Z.tar.gz",
+    "dbBackup": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0906Z.sqlite",
+    "artifact": "/Users/liheng/.devspace/devspace-runtime-8592901-923a51d7619f.tgz",
+    "candidate": "/Users/liheng/.devspace/candidates/8592901-923a51d7619f-20261106T0906Z",
+    "expectedHash": "923a51d7619f565e22f95e82a28a8ff900523cb06c4d57f696156643fc257564"
+  },
+  "preflight": {
+    "host": "lihengdeMac-mini-2.local",
+    "home": "/Users/liheng",
+    "uid": 501,
+    "node": {
+      "node": "v24.15.0",
+      "platform": "darwin",
+      "arch": "arm64",
+      "abi": "137"
+    },
+    "npmPrefix": "/opt/homebrew",
+    "label": "com.liheng.devspace-mini",
+    "launchRunning": true,
+    "pid": "70272",
+    "program": "/opt/homebrew/bin/devspace",
+    "bin": "/opt/homebrew/lib/node_modules/@waishnav/devspace/dist/cli.js",
+    "package": "@waishnav/devspace@1.0.6",
+    "packagePath": "/opt/homebrew/lib/node_modules/@waishnav/devspace",
+    "configDir": "/Users/liheng/.devspace",
+    "stateDir": "/Users/liheng/.local/share/devspace",
+    "configHash": "72614856bda017243d3082bab4aed9c5e8014bce1bbaa7d7c815a340996cf19c",
+    "hashes": {
+      "/Users/liheng/Library/LaunchAgents/com.liheng.devspace-mini.plist": "ec1c7107d9e9b0c67bc47973d0e2bc432c65ed9d9609d5f4e86a73f63dd7e8ba",
+      "/Users/liheng/.devspace/config.json": "72614856bda017243d3082bab4aed9c5e8014bce1bbaa7d7c815a340996cf19c",
+      "/opt/homebrew/lib/node_modules/@waishnav/devspace/package.json": "90a9fb3e56f2b8374ec332bf29f39e2541ce679af50771622a0dfec2dbc65b01",
+      "/opt/homebrew/lib/node_modules/@waishnav/devspace/dist/server.js": "84cd96ad4a021abd29dc028c0fb74acce17ab92a4a653d033d5dd830630c2096"
+    },
+    "toolMode": "full",
+    "publicBaseUrl": "https://mac-mini.tailf5bd87.ts.net",
+    "health": 200,
+    "unauthMcp": 401,
+    "taskCounts": {},
+    "databaseNames": [
+      "devspace.sqlite",
+      "devspace.sqlite-shm",
+      "devspace.sqlite-wal"
+    ]
+  },
+  "authBefore": {
+    "configFiles": [
+      {
+        "name": "config.json",
+        "bytes": 132,
+        "mode": "0o600",
+        "sha256": "72614856bda017243d3082bab4aed9c5e8014bce1bbaa7d7c815a340996cf19c"
+      },
+      {
+        "name": "auth.json",
+        "bytes": 66,
+        "mode": "0o600",
+        "sha256": "198813a2312983721a2225eba2cb5de4617104dae8b574868b1f0173561d96b9"
+      }
+    ],
+    "oauthTables": {
+      "oauth_access_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_clients": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_refresh_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    },
+    "writable": {
+      "globalParent": true,
+      "bin": true,
+      "configDir": true
+    }
+  },
+  "rollbackArchive": {
+    "archive": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0906Z.tar.gz",
+    "archiveSha256": "960e72d69d4168dd82271aa66f442eca79a15d4508874b41b9571ce25ff83256",
+    "archiveBytes": 312655129,
+    "archiveMode": "0o600",
+    "entries": 41699,
+    "containsOldInstall": true,
+    "containsBin": true,
+    "containsConfig": true,
+    "containsAuth": true,
+    "containsPlist": true,
+    "dbBackup": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0906Z.sqlite",
+    "dbMode": "0o600",
+    "dbIntegrity": "ok",
+    "artifactExists": false
+  },
+  "candidateInstall": "npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.\nnpm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\n\nadded 335 packages in 11s\n",
+  "candidateProbe": {
+    "status": "PASS",
+    "packageRoot": "/Users/liheng/.devspace/candidates/8592901-923a51d7619f-20261106T0906Z/node_modules/@waishnav/devspace",
+    "node": "v24.15.0",
+    "abi": "137",
+    "sameDirectoryUnrelatedChange": "PASS",
+    "staleTargetProtected": "PASS",
+    "sqliteNativeLoaded": true,
+    "detachedWorker": "PASS",
+    "toolNames": [
+      "apply_patch",
+      "bash",
+      "cancel_task",
+      "copy_file",
+      "edit",
+      "exec_command",
+      "export_artifact",
+      "glob",
+      "grep",
+      "inspect_files",
+      "list_tasks",
+      "ls",
+      "make_directory",
+      "move_file",
+      "open_workspace",
+      "read",
+      "read_page",
+      "start_task",
+      "task_input",
+      "task_log",
+      "task_status",
+      "write",
+      "write_stdin"
+    ],
+    "scope": "isolated in-memory MCP against installed code; no production OAuth used"
+  },
+  "globalInstall": "npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.\nnpm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\n\nadded 4 packages, removed 24 packages, and changed 331 packages in 5s\n",
+  "installedProbe": {
+    "status": "PASS",
+    "packageRoot": "/opt/homebrew/lib/node_modules/@waishnav/devspace",
+    "node": "v24.15.0",
+    "abi": "137",
+    "sameDirectoryUnrelatedChange": "PASS",
+    "staleTargetProtected": "PASS",
+    "sqliteNativeLoaded": true,
+    "detachedWorker": "PASS",
+    "toolNames": [
+      "apply_patch",
+      "bash",
+      "cancel_task",
+      "copy_file",
+      "edit",
+      "exec_command",
+      "export_artifact",
+      "glob",
+      "grep",
+      "inspect_files",
+      "list_tasks",
+      "ls",
+      "make_directory",
+      "move_file",
+      "open_workspace",
+      "read",
+      "read_page",
+      "start_task",
+      "task_input",
+      "task_log",
+      "task_status",
+      "write",
+      "write_stdin"
+    ],
+    "scope": "isolated in-memory MCP against installed code; no production OAuth used"
+  },
+  "restartTask": {
+    "status": "running",
+    "taskId": "556bcdc4-c6cb-4d3b-903a-c6032297bf4f",
+    "checkpoint": "/var/folders/zj/y56s48w94_l68w_xkbv9_yvh0000gn/T/devspace-runtime-probe-4UzPCx/checkpoint.json",
+    "workerPid": 39530,
+    "childPid": 39532,
+    "packageRoot": "/opt/homebrew/lib/node_modules/@waishnav/devspace"
+  },
+  "restartCommand": "/bin/launchctl kickstart -k gui/501/com.liheng.devspace-mini",
+  "after": {
+    "host": "mac-mini",
+    "label": "com.liheng.devspace-mini",
+    "oldPid": 70272,
+    "newPid": 39559,
+    "pidChanged": true,
+    "process": "node /opt/homebrew/bin/devspace serve",
+    "bin": "/opt/homebrew/lib/node_modules/@waishnav/devspace/dist/cli.js",
+    "localHealth": {
+      "code": "200",
+      "exitCode": 0
+    },
+    "localUnauthMcp": {
+      "code": "401",
+      "exitCode": 0
+    },
+    "publicHealth": {
+      "code": "200",
+      "exitCode": 0
+    },
+    "publicUnauthMcp": {
+      "code": "401",
+      "exitCode": 0
+    },
+    "runtimeHashes": {
+      "dist/server.js": "bb227bed2ccfd059cac21f435e4fbf30e4f110016cb5fccb9467fcb9310c39c4",
+      "dist/workspaces.js": "4307f836c912171ba40a8d87c9da484e97b2a0fde63502062aff0bcee2d79342",
+      "dist/durable-tasks.js": "9a2031e87ae3e513dbe35f990db6df9ae2e2f98577b316dfc2317d743c480428",
+      "dist/task-worker.js": "c6632ed99f0b08b51c1fd30aa8b6f7444f1663c5917314bc8669d72c80ca2001",
+      "dist/cli.js": "8ff985b0725e006ecf0626783ef4cf8f9b1adea8d114ceb088cd7465fa1e2481"
+    },
+    "configSha256": "72614856bda017243d3082bab4aed9c5e8014bce1bbaa7d7c815a340996cf19c",
+    "authSha256": "198813a2312983721a2225eba2cb5de4617104dae8b574868b1f0173561d96b9",
+    "plistSha256": "ec1c7107d9e9b0c67bc47973d0e2bc432c65ed9d9609d5f4e86a73f63dd7e8ba",
+    "oauthTables": {
+      "oauth_access_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_clients": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_refresh_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    },
+    "testWorkerAfterRestart": {
+      "status": "completed",
+      "workerPid": 39530,
+      "childPid": 39532,
+      "exitCode": 0
+    }
+  },
+  "taskCompletion": {
+    "status": "PASS",
+    "taskId": "556bcdc4-c6cb-4d3b-903a-c6032297bf4f",
+    "workerPid": 39530,
+    "childPid": 39532,
+    "exitCode": 0,
+    "elapsedSeconds": 42.441,
+    "log": "durable-start\ndurable-complete\n",
+    "packageRoot": "/opt/homebrew/lib/node_modules/@waishnav/devspace",
+    "scope": "isolated DurableTasks manager across real DevSpace service restart; not live OAuth MCP integration"
+  },
+  "durabilityScope": "The isolated DurableTasks manager was launched through SSH using installed dist. Its detached worker survived the real DevSpace service restart and completed. It was not started by a live authenticated MCP tool, and this does not prove the worker initially belonged to the DevSpace LaunchAgent. Existing OAuth tables were empty before and after; no client registration was performed.",
+  "rollbackCommands": [
+    "PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin /opt/homebrew/bin/npm uninstall --global --prefix /opt/homebrew --ignore-scripts @waishnav/devspace",
+    "/usr/bin/tar -xzpf /Users/liheng/.devspace/rollback-devspace-8592901-20261106T0906Z.tar.gz -C / opt/homebrew/lib/node_modules/@waishnav/devspace opt/homebrew/bin/devspace",
+    "/bin/launchctl kickstart -k gui/501/com.liheng.devspace-mini"
+  ],
+  "rollbackNote": "Run on mac-mini if runtime rollback is needed; backup contains original config/auth/plist, and a separate consistent SQLite snapshot. Runtime rollback restores package/bin only so later legitimate state is preserved."
+}

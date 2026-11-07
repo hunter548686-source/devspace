@@ -1,0 +1,7 @@
+diff --git a/docs/.npmignore b/docs/.npmignore
+new file mode 100644
+--- /dev/null
++++ b/docs/.npmignore
+@@ -0,0 +1,2 @@
++evidence/
++decisions.md

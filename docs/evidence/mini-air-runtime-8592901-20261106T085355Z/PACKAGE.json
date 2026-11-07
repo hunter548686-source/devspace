@@ -1,0 +1,38 @@
+{
+  "sourceCommit": "859290170b1a84ebfafaf368119407393416bc3b",
+  "packagingRule": {
+    "path": "docs/.npmignore",
+    "newFile": true,
+    "contents": "evidence/\ndecisions.md\n",
+    "committed": false
+  },
+  "artifact": {
+    "path": "/Users/liheng/Codex project/New project/devspace/waishnav-devspace-1.0.6.tgz",
+    "sha256": "923a51d7619f565e22f95e82a28a8ff900523cb06c4d57f696156643fc257564",
+    "bytes": 3192989,
+    "entries": 376,
+    "excludedViolation": [],
+    "runtimeSha256": {
+      "dist/cli.js": "8ff985b0725e006ecf0626783ef4cf8f9b1adea8d114ceb088cd7465fa1e2481",
+      "dist/server.js": "bb227bed2ccfd059cac21f435e4fbf30e4f110016cb5fccb9467fcb9310c39c4",
+      "dist/durable-tasks.js": "9a2031e87ae3e513dbe35f990db6df9ae2e2f98577b316dfc2317d743c480428",
+      "dist/task-worker.js": "c6632ed99f0b08b51c1fd30aa8b6f7444f1663c5917314bc8669d72c80ca2001",
+      "dist/workspaces.js": "4307f836c912171ba40a8d87c9da484e97b2a0fde63502062aff0bcee2d79342"
+    }
+  },
+  "checks": {
+    "npmTest": "PASS, complete manifest test chain via canonical tsx CLI",
+    "typecheck": "PASS, Bridge local build",
+    "build": "PASS, Bridge local build",
+    "dryRun": {
+      "entryCount": 376,
+      "size": 3192989,
+      "unpackedSize": 12989000,
+      "unknownNonBuildFiles": [],
+      "excludedViolation": [],
+      "credentialPatternHits": [],
+      "passed": true
+    }
+  },
+  "scope": "Fixed 8592901 runtime code plus explicit packaging exclusions; not a claim of an untouched pure-Git archive. No native node_modules bundled."
+}

@@ -1,0 +1,253 @@
+{
+  "status": "PASS",
+  "host": "macbook-air",
+  "sourceCommit": "859290170b1a84ebfafaf368119407393416bc3b",
+  "artifactSha256": "923a51d7619f565e22f95e82a28a8ff900523cb06c4d57f696156643fc257564",
+  "plan": {
+    "host": "macbook-air",
+    "stamp": "20261106T0914Z",
+    "archive": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0914Z.tar.gz",
+    "dbBackup": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0914Z.sqlite",
+    "artifact": "/Users/liheng/.devspace/devspace-runtime-8592901-923a51d7619f.tgz",
+    "candidate": "/Users/liheng/.devspace/candidates/8592901-923a51d7619f-20261106T0914Z",
+    "expectedHash": "923a51d7619f565e22f95e82a28a8ff900523cb06c4d57f696156643fc257564"
+  },
+  "preflight": {
+    "host": "lihengdeMacBook-Air.local",
+    "home": "/Users/liheng",
+    "uid": 501,
+    "node": {
+      "node": "v25.5.0",
+      "platform": "darwin",
+      "arch": "arm64",
+      "abi": "141"
+    },
+    "npmPrefix": "/opt/homebrew",
+    "label": "com.liheng.devspace-air",
+    "launchRunning": true,
+    "pid": "57453",
+    "program": "/opt/homebrew/bin/devspace",
+    "bin": "/opt/homebrew/lib/node_modules/@waishnav/devspace/dist/cli.js",
+    "package": "@waishnav/devspace@1.0.6",
+    "configDir": "/Users/liheng/.devspace",
+    "stateDir": "/Users/liheng/.local/share/devspace",
+    "hashes": {
+      "/Users/liheng/Library/LaunchAgents/com.liheng.devspace-air.plist": "ed54b824a7caa43e337cdc992078837d66370cac210b30e16d823b05f617bf22",
+      "/Users/liheng/.devspace/config.json": "da7d6e7ab05b6503ec5f1e4806fc8375d3507280ed892c65482b9f9fab58b9c2",
+      "/Users/liheng/.devspace/auth.json": "f99b8aa80ae69a1d01db114aa20e0577de8523fdb6c8e3b1e44c5a490572984f",
+      "/opt/homebrew/lib/node_modules/@waishnav/devspace/package.json": "90a9fb3e56f2b8374ec332bf29f39e2541ce679af50771622a0dfec2dbc65b01",
+      "/opt/homebrew/lib/node_modules/@waishnav/devspace/dist/server.js": "84cd96ad4a021abd29dc028c0fb74acce17ab92a4a653d033d5dd830630c2096"
+    },
+    "toolMode": "full",
+    "publicBaseUrl": "https://macbook-air.tailf5bd87.ts.net",
+    "health": {
+      "code": "200",
+      "exitCode": 0
+    },
+    "unauthMcp": {
+      "code": "401",
+      "exitCode": 0
+    },
+    "taskCounts": {},
+    "oauthTables": {
+      "oauth_access_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_clients": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_refresh_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    },
+    "configFiles": [
+      "config.json",
+      "auth.json"
+    ],
+    "writable": {
+      "globalParent": true,
+      "bin": true
+    }
+  },
+  "rollbackArchive": {
+    "archive": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0914Z.tar.gz",
+    "archiveSha256": "98396a702603ea5577aee265ad55c97e8a671b58ce29bf96431a467ba10ca35d",
+    "archiveBytes": 312650505,
+    "archiveMode": "0o600",
+    "entries": 41699,
+    "containsOldInstall": true,
+    "containsBin": true,
+    "containsConfig": true,
+    "containsAuth": true,
+    "containsPlist": true,
+    "dbBackup": "/Users/liheng/.devspace/rollback-devspace-8592901-20261106T0914Z.sqlite",
+    "dbMode": "0o600",
+    "dbIntegrity": "ok",
+    "artifactExists": false
+  },
+  "candidateInstall": "npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.\nnpm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\n\nadded 335 packages in 11s\n",
+  "candidateProbe": {
+    "status": "PASS",
+    "packageRoot": "/Users/liheng/.devspace/candidates/8592901-923a51d7619f-20261106T0914Z/node_modules/@waishnav/devspace",
+    "node": "v25.5.0",
+    "abi": "141",
+    "sameDirectoryUnrelatedChange": "PASS",
+    "staleTargetProtected": "PASS",
+    "sqliteNativeLoaded": true,
+    "detachedWorker": "PASS",
+    "toolNames": [
+      "apply_patch",
+      "bash",
+      "cancel_task",
+      "copy_file",
+      "edit",
+      "exec_command",
+      "export_artifact",
+      "glob",
+      "grep",
+      "inspect_files",
+      "list_tasks",
+      "ls",
+      "make_directory",
+      "move_file",
+      "open_workspace",
+      "read",
+      "read_page",
+      "start_task",
+      "task_input",
+      "task_log",
+      "task_status",
+      "write",
+      "write_stdin"
+    ],
+    "scope": "isolated in-memory MCP against installed code; no production OAuth used"
+  },
+  "globalInstall": "npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.\nnpm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead\n\nadded 4 packages, removed 24 packages, and changed 331 packages in 6s\n",
+  "installedProbe": {
+    "status": "PASS",
+    "packageRoot": "/opt/homebrew/lib/node_modules/@waishnav/devspace",
+    "node": "v25.5.0",
+    "abi": "141",
+    "sameDirectoryUnrelatedChange": "PASS",
+    "staleTargetProtected": "PASS",
+    "sqliteNativeLoaded": true,
+    "detachedWorker": "PASS",
+    "toolNames": [
+      "apply_patch",
+      "bash",
+      "cancel_task",
+      "copy_file",
+      "edit",
+      "exec_command",
+      "export_artifact",
+      "glob",
+      "grep",
+      "inspect_files",
+      "list_tasks",
+      "ls",
+      "make_directory",
+      "move_file",
+      "open_workspace",
+      "read",
+      "read_page",
+      "start_task",
+      "task_input",
+      "task_log",
+      "task_status",
+      "write",
+      "write_stdin"
+    ],
+    "scope": "isolated in-memory MCP against installed code; no production OAuth used"
+  },
+  "restartTask": {
+    "status": "running",
+    "taskId": "7dd9b70b-b21f-4ff5-9eb9-2f3c31c71273",
+    "checkpoint": "/var/folders/0v/67l55h_x59v_w93rfty4d95r0000gn/T/devspace-runtime-probe-f6rGPd/checkpoint.json",
+    "workerPid": 92106,
+    "childPid": 92107,
+    "packageRoot": "/opt/homebrew/lib/node_modules/@waishnav/devspace"
+  },
+  "restartCommand": "/bin/launchctl kickstart -k gui/501/com.liheng.devspace-air",
+  "after": {
+    "host": "macbook-air",
+    "label": "com.liheng.devspace-air",
+    "oldPid": 57453,
+    "newPid": 92235,
+    "pidChanged": true,
+    "process": "node /opt/homebrew/bin/devspace serve",
+    "bin": "/opt/homebrew/lib/node_modules/@waishnav/devspace/dist/cli.js",
+    "localHealth": {
+      "code": "200",
+      "exitCode": 0
+    },
+    "localUnauthMcp": {
+      "code": "401",
+      "exitCode": 0
+    },
+    "publicHealth": {
+      "code": "200",
+      "exitCode": 0
+    },
+    "publicUnauthMcp": {
+      "code": "401",
+      "exitCode": 0
+    },
+    "runtimeHashes": {
+      "dist/server.js": "bb227bed2ccfd059cac21f435e4fbf30e4f110016cb5fccb9467fcb9310c39c4",
+      "dist/workspaces.js": "4307f836c912171ba40a8d87c9da484e97b2a0fde63502062aff0bcee2d79342",
+      "dist/durable-tasks.js": "9a2031e87ae3e513dbe35f990db6df9ae2e2f98577b316dfc2317d743c480428",
+      "dist/task-worker.js": "c6632ed99f0b08b51c1fd30aa8b6f7444f1663c5917314bc8669d72c80ca2001",
+      "dist/cli.js": "8ff985b0725e006ecf0626783ef4cf8f9b1adea8d114ceb088cd7465fa1e2481"
+    },
+    "configSha256": "da7d6e7ab05b6503ec5f1e4806fc8375d3507280ed892c65482b9f9fab58b9c2",
+    "authSha256": "f99b8aa80ae69a1d01db114aa20e0577de8523fdb6c8e3b1e44c5a490572984f",
+    "plistSha256": "ed54b824a7caa43e337cdc992078837d66370cac210b30e16d823b05f617bf22",
+    "oauthTables": {
+      "oauth_access_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_clients": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      "oauth_refresh_tokens": {
+        "rows": 0,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    },
+    "testWorkerAfterRestart": {
+      "status": "running",
+      "workerPid": 92106,
+      "childPid": 92107,
+      "exitCode": null,
+      "alive": true
+    }
+  },
+  "taskCompletion": {
+    "status": "PASS",
+    "taskId": "7dd9b70b-b21f-4ff5-9eb9-2f3c31c71273",
+    "workerPid": 92106,
+    "childPid": 92107,
+    "exitCode": 0,
+    "elapsedSeconds": 33.58,
+    "log": "durable-start\ndurable-complete\n",
+    "packageRoot": "/opt/homebrew/lib/node_modules/@waishnav/devspace",
+    "scope": "isolated DurableTasks manager across real DevSpace service restart; not live OAuth MCP integration"
+  },
+  "durabilityScope": "The isolated DurableTasks manager was launched through SSH using installed dist. Its detached worker was observed alive/running after the real DevSpace service restart and completed. It was not started by a live authenticated MCP tool, and this does not prove the worker initially belonged to the DevSpace LaunchAgent. Existing OAuth tables were empty before and after; no client registration was performed.",
+  "independentRootVerification": {
+    "reportedBy": "/root",
+    "utc": "2026-11-06T09:17:56Z",
+    "result": "Root independently checked four installed dist hashes against Pro canonical; all match."
+  },
+  "rollbackCommands": [
+    "PATH=/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin /opt/homebrew/bin/npm uninstall --global --prefix /opt/homebrew --ignore-scripts @waishnav/devspace",
+    "/usr/bin/tar -xzpf /Users/liheng/.devspace/rollback-devspace-8592901-20261106T0914Z.tar.gz -C / opt/homebrew/lib/node_modules/@waishnav/devspace opt/homebrew/bin/devspace",
+    "/bin/launchctl kickstart -k gui/501/com.liheng.devspace-air"
+  ],
+  "rollbackNote": "Run on macbook-air if runtime rollback is needed; backup contains original config/auth/plist, and a separate consistent SQLite snapshot. Runtime rollback restores package/bin only so later legitimate state is preserved."
+}
